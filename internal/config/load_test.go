@@ -132,6 +132,44 @@ func TestLookupConfigs_BoundedByProject(t *testing.T) {
 	})
 }
 
+// TestLookupConfigs_DataFileRanksBelowUserConfig pins config precedence:
+// the persisted data file must come before the user's crush.json in the
+// path list, so the merge (later wins) lets the user's declared config
+// override the persisted runtime state.
+func TestLookupConfigs_DataFileRanksBelowUserConfig(t *testing.T) {
+	globalDir := t.TempDir()
+	dataDir := t.TempDir()
+	t.Setenv("CRUSH_GLOBAL_CONFIG", globalDir)
+	t.Setenv("CRUSH_GLOBAL_DATA", dataDir)
+
+	got := lookupConfigs(t.TempDir())
+
+	dataIdx, userIdx := -1, -1
+	for i, p := range got {
+		switch p {
+		case GlobalConfigData():
+			dataIdx = i
+		case GlobalConfig():
+			userIdx = i
+		}
+	}
+	require.GreaterOrEqual(t, dataIdx, 0, "data config should be present")
+	require.GreaterOrEqual(t, userIdx, 0, "user config should be present")
+	require.Less(t, dataIdx, userIdx, "data file must precede (rank below) the user config")
+}
+
+// TestLoadFromBytes_UserConfigOverridesDataFile is the end-to-end of the
+// above: with the data file passed first (lower priority) and the user
+// config second, the user's reasoning_effort wins.
+func TestLoadFromBytes_UserConfigOverridesDataFile(t *testing.T) {
+	dataFile := []byte(`{"models":{"large":{"model":"gpt-5.5","provider":"chatgpt","reasoning_effort":"medium"}}}`)
+	userCfg := []byte(`{"models":{"large":{"model":"gpt-5.5","provider":"chatgpt","reasoning_effort":"xhigh"}}}`)
+
+	cfg, err := loadFromBytes([][]byte{dataFile, userCfg})
+	require.NoError(t, err)
+	require.Equal(t, "xhigh", cfg.Models[SelectedModelTypeLarge].ReasoningEffort)
+}
+
 func TestLoadFromConfigPaths_InvalidJSON(t *testing.T) {
 	t.Parallel()
 
