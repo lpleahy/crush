@@ -819,10 +819,14 @@ func configureSelectedModels(store *ConfigStore, knownProviders []catwalk.Provid
 // up. Global user-level config locations are always included
 // regardless of the boundary.
 func lookupConfigs(cwd string) []string {
-	// prepend default config paths
+	// Config precedence (later wins in the merge): the persisted data file
+	// (model picks, recent models, runtime toggles, OAuth tokens) is the
+	// LOWEST priority, so the user's hand-authored config is the source of
+	// truth for anything it declares; the data file only fills in what the
+	// user didn't set. Project configs (appended below) outrank both.
 	configPaths := []string{
-		GlobalConfig(),
 		GlobalConfigData(),
+		GlobalConfig(),
 	}
 
 	configNames := []string{appName + ".json", "." + appName + ".json"}
