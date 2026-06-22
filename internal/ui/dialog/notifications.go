@@ -5,6 +5,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/ui/common"
 	"github.com/charmbracelet/crush/internal/ui/list"
 	"github.com/charmbracelet/crush/internal/ui/styles"
@@ -90,23 +91,11 @@ func NewNotifications(com *common.Common) *Notifications {
 	n.input.SetStyles(com.Styles.TextInput)
 	n.input.Focus()
 
-	n.keyMap.Select = key.NewBinding(
-		key.WithKeys("enter", "ctrl+y"),
-		key.WithHelp("enter", "confirm"),
-	)
-	n.keyMap.Next = key.NewBinding(
-		key.WithKeys("down", "ctrl+n"),
-		key.WithHelp("↓", "next item"),
-	)
-	n.keyMap.Previous = key.NewBinding(
-		key.WithKeys("up", "ctrl+p"),
-		key.WithHelp("↑", "previous item"),
-	)
-	n.keyMap.UpDown = key.NewBinding(
-		key.WithKeys("up", "down"),
-		key.WithHelp("↑/↓", "choose"),
-	)
-	n.keyMap.Close = CloseKey
+	n.keyMap.Select = common.Binding(com.Config(), config.KeybindingGroupNotifications, "select")
+	n.keyMap.Next = common.Binding(com.Config(), config.KeybindingGroupNotifications, "next")
+	n.keyMap.Previous = common.Binding(com.Config(), config.KeybindingGroupNotifications, "previous")
+	n.keyMap.UpDown = common.Binding(com.Config(), config.KeybindingGroupNotifications, "up_down")
+	n.keyMap.Close = closeBinding(com)
 
 	n.setItems()
 	return n

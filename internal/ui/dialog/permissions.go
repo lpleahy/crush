@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/agent/tools"
+	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/fsext"
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/stringext"
@@ -97,69 +98,24 @@ type permissionsKeyMap struct {
 	Scroll           key.Binding
 }
 
-func defaultPermissionsKeyMap() permissionsKeyMap {
+func defaultPermissionsKeyMap(cfg *config.Config) permissionsKeyMap {
 	return permissionsKeyMap{
-		Left: key.NewBinding(
-			key.WithKeys("left", "h"),
-			key.WithHelp("←", "previous"),
-		),
-		Right: key.NewBinding(
-			key.WithKeys("right", "l"),
-			key.WithHelp("→", "next"),
-		),
-		Tab: key.NewBinding(
-			key.WithKeys("tab"),
-			key.WithHelp("tab", "next option"),
-		),
-		Select: key.NewBinding(
-			key.WithKeys("enter", "ctrl+y"),
-			key.WithHelp("enter", "confirm"),
-		),
-		Allow: key.NewBinding(
-			key.WithKeys("a", "A", "ctrl+a"),
-			key.WithHelp("a", "allow"),
-		),
-		AllowSession: key.NewBinding(
-			key.WithKeys("s", "S", "ctrl+s"),
-			key.WithHelp("s", "allow session"),
-		),
-		Deny: key.NewBinding(
-			key.WithKeys("d", "D"),
-			key.WithHelp("d", "deny"),
-		),
-		Close: CloseKey,
-		ToggleDiffMode: key.NewBinding(
-			key.WithKeys("t"),
-			key.WithHelp("t", "toggle diff view"),
-		),
-		ToggleFullscreen: key.NewBinding(
-			key.WithKeys("f"),
-			key.WithHelp("f", "toggle fullscreen"),
-		),
-		ScrollUp: key.NewBinding(
-			key.WithKeys("shift+up", "K"),
-			key.WithHelp("shift+↑", "scroll up"),
-		),
-		ScrollDown: key.NewBinding(
-			key.WithKeys("shift+down", "J"),
-			key.WithHelp("shift+↓", "scroll down"),
-		),
-		ScrollLeft: key.NewBinding(
-			key.WithKeys("shift+left", "H"),
-			key.WithHelp("shift+←", "scroll left"),
-		),
-		ScrollRight: key.NewBinding(
-			key.WithKeys("shift+right", "L"),
-			key.WithHelp("shift+→", "scroll right"),
-		),
-		Choose: key.NewBinding(
-			key.WithKeys("left", "right"),
-			key.WithHelp("←/→", "choose"),
-		),
-		Scroll: key.NewBinding(
-			key.WithKeys("shift+left", "shift+down", "shift+up", "shift+right"),
-			key.WithHelp("shift+←↓↑→", "scroll"),
-		),
+		Left:             common.Binding(cfg, config.KeybindingGroupPermissions, "left"),
+		Right:            common.Binding(cfg, config.KeybindingGroupPermissions, "right"),
+		Tab:              common.Binding(cfg, config.KeybindingGroupPermissions, "tab"),
+		Select:           common.Binding(cfg, config.KeybindingGroupPermissions, "select"),
+		Allow:            common.Binding(cfg, config.KeybindingGroupPermissions, "allow"),
+		AllowSession:     common.Binding(cfg, config.KeybindingGroupPermissions, "allow_session"),
+		Deny:             common.Binding(cfg, config.KeybindingGroupPermissions, "deny"),
+		Close:            common.Binding(cfg, config.KeybindingGroupDialog, "close"),
+		ToggleDiffMode:   common.Binding(cfg, config.KeybindingGroupPermissions, "toggle_diff_mode"),
+		ToggleFullscreen: common.Binding(cfg, config.KeybindingGroupPermissions, "toggle_fullscreen"),
+		ScrollUp:         common.Binding(cfg, config.KeybindingGroupPermissions, "scroll_up"),
+		ScrollDown:       common.Binding(cfg, config.KeybindingGroupPermissions, "scroll_down"),
+		ScrollLeft:       common.Binding(cfg, config.KeybindingGroupPermissions, "scroll_left"),
+		ScrollRight:      common.Binding(cfg, config.KeybindingGroupPermissions, "scroll_right"),
+		Choose:           common.Binding(cfg, config.KeybindingGroupPermissions, "choose"),
+		Scroll:           common.Binding(cfg, config.KeybindingGroupPermissions, "scroll"),
 	}
 }
 
@@ -180,7 +136,7 @@ func NewPermissions(com *common.Common, perm permission.PermissionRequest, opts 
 	h := help.New()
 	h.Styles = com.Styles.DialogHelpStyles()
 
-	km := defaultPermissionsKeyMap()
+	km := defaultPermissionsKeyMap(com.Config())
 
 	// Configure viewport with matching keybindings.
 	vp := viewport.New()

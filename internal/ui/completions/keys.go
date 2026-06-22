@@ -2,6 +2,8 @@ package completions
 
 import (
 	"charm.land/bubbles/v2/key"
+	"github.com/charmbracelet/crush/internal/config"
+	"github.com/charmbracelet/crush/internal/ui/common"
 )
 
 // KeyMap defines the key bindings for the completions component.
@@ -15,32 +17,14 @@ type KeyMap struct {
 }
 
 // DefaultKeyMap returns the default key bindings for completions.
-func DefaultKeyMap() KeyMap {
+func DefaultKeyMap(cfg *config.Config) KeyMap {
 	return KeyMap{
-		Down: key.NewBinding(
-			key.WithKeys("down"),
-			key.WithHelp("down", "move down"),
-		),
-		Up: key.NewBinding(
-			key.WithKeys("up"),
-			key.WithHelp("up", "move up"),
-		),
-		Select: key.NewBinding(
-			key.WithKeys("enter", "tab", "ctrl+y"),
-			key.WithHelp("enter", "select"),
-		),
-		Cancel: key.NewBinding(
-			key.WithKeys("esc", "alt+esc"),
-			key.WithHelp("esc", "cancel"),
-		),
-		DownInsert: key.NewBinding(
-			key.WithKeys("ctrl+n"),
-			key.WithHelp("ctrl+n", "insert next"),
-		),
-		UpInsert: key.NewBinding(
-			key.WithKeys("ctrl+p"),
-			key.WithHelp("ctrl+p", "insert previous"),
-		),
+		Down:       common.Binding(cfg, config.KeybindingGroupCompletions, "down"),
+		Up:         common.Binding(cfg, config.KeybindingGroupCompletions, "up"),
+		Select:     common.Binding(cfg, config.KeybindingGroupCompletions, "select"),
+		Cancel:     common.Binding(cfg, config.KeybindingGroupCompletions, "cancel"),
+		DownInsert: common.Binding(cfg, config.KeybindingGroupCompletions, "down_insert"),
+		UpInsert:   common.Binding(cfg, config.KeybindingGroupCompletions, "up_insert"),
 	}
 }
 

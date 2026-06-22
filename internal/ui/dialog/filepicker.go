@@ -14,6 +14,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/home"
 	"github.com/charmbracelet/crush/internal/ui/common"
 	fimage "github.com/charmbracelet/crush/internal/ui/image"
@@ -67,34 +68,13 @@ func NewFilePicker(com *common.Common) (*FilePicker, tea.Cmd) {
 
 	f.help = help
 
-	f.km.Select = key.NewBinding(
-		key.WithKeys("enter"),
-		key.WithHelp("enter", "accept"),
-	)
-	f.km.Down = key.NewBinding(
-		key.WithKeys("down", "j"),
-		key.WithHelp("down/j", "move down"),
-	)
-	f.km.Up = key.NewBinding(
-		key.WithKeys("up", "k"),
-		key.WithHelp("up/k", "move up"),
-	)
-	f.km.Forward = key.NewBinding(
-		key.WithKeys("right", "l"),
-		key.WithHelp("right/l", "move forward"),
-	)
-	f.km.Backward = key.NewBinding(
-		key.WithKeys("left", "h"),
-		key.WithHelp("left/h", "move backward"),
-	)
-	f.km.Navigate = key.NewBinding(
-		key.WithKeys("right", "l", "left", "h", "up", "k", "down", "j"),
-		key.WithHelp("↑↓←→", "navigate"),
-	)
-	f.km.Close = key.NewBinding(
-		key.WithKeys("esc", "alt+esc"),
-		key.WithHelp("esc", "close/exit"),
-	)
+	f.km.Select = common.Binding(com.Config(), config.KeybindingGroupFilePicker, "select")
+	f.km.Down = common.Binding(com.Config(), config.KeybindingGroupFilePicker, "down")
+	f.km.Up = common.Binding(com.Config(), config.KeybindingGroupFilePicker, "up")
+	f.km.Forward = common.Binding(com.Config(), config.KeybindingGroupFilePicker, "forward")
+	f.km.Backward = common.Binding(com.Config(), config.KeybindingGroupFilePicker, "backward")
+	f.km.Navigate = common.Binding(com.Config(), config.KeybindingGroupFilePicker, "navigate")
+	f.km.Close = common.Binding(com.Config(), config.KeybindingGroupFilePicker, "close")
 
 	fp := filepicker.New()
 	fp.AllowedTypes = common.AllowedImageTypes

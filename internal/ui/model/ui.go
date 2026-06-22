@@ -349,10 +349,11 @@ func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
 	searchInput.Prompt = "/"
 	searchInput.SetStyles(com.Styles.TextInput)
 
-	keyMap := DefaultKeyMap()
+	keyMap := DefaultKeyMap(com.Config())
 
 	// Completions component
 	comp := completions.New(
+		com.Config(),
 		com.Styles.Completions.Normal,
 		com.Styles.Completions.Focused,
 		com.Styles.Completions.Match,
@@ -823,10 +824,10 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tea.KeyboardEnhancementsMsg:
 		m.keyenh = msg
-		if msg.SupportsKeyDisambiguation() {
-			m.keyMap.Models.SetHelp("ctrl+m", "models")
-			m.keyMap.Editor.Newline.SetHelp("shift+enter", "newline")
-		}
+		// Don't re-stamp the models/newline help here: common.Binding
+		// already advertises the effective shortcut (ctrl+m / shift+enter
+		// by default, or the user's override), so hardcoding the defaults
+		// would clobber a rebound key in the footer.
 	case copyChatHighlightMsg:
 		cmds = append(cmds, m.copyChatHighlight())
 	case DelayedClickMsg:

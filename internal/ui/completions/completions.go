@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/agent/tools/mcp"
+	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/fsext"
 	"github.com/charmbracelet/crush/internal/ui/list"
 	"github.com/charmbracelet/x/ansi"
@@ -96,13 +97,13 @@ var namePriorityRules = []namePriorityRule{
 }
 
 // New creates a new completions component.
-func New(normalStyle, focusedStyle, matchStyle lipgloss.Style) *Completions {
+func New(cfg *config.Config, normalStyle, focusedStyle, matchStyle lipgloss.Style) *Completions {
 	l := list.NewFilterableList()
 	l.SetGap(0)
 	l.SetReverse(true)
 
 	return &Completions{
-		keyMap:       DefaultKeyMap(),
+		keyMap:       DefaultKeyMap(cfg),
 		list:         l,
 		normalStyle:  normalStyle,
 		focusedStyle: focusedStyle,

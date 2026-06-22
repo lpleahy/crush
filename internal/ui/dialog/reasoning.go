@@ -29,12 +29,30 @@ type Reasoning struct {
 	list  *list.FilterableList
 	input textinput.Model
 
-	keyMap struct {
-		Select   key.Binding
-		Next     key.Binding
-		Previous key.Binding
-		UpDown   key.Binding
-		Close    key.Binding
+	keyMap reasoningKeyMap
+}
+
+type reasoningKeyMap struct {
+	Select   key.Binding
+	Next     key.Binding
+	Previous key.Binding
+	UpDown   key.Binding
+	Close    key.Binding
+}
+
+// defaultReasoningKeyMap wires the reasoning-effort picker keymap from the
+// catalog, applying any options.tui.keybindings.reasoning override.
+func defaultReasoningKeyMap(com *common.Common) reasoningKeyMap {
+	var cfg *config.Config
+	if com != nil {
+		cfg = com.Config()
+	}
+	return reasoningKeyMap{
+		Select:   common.Binding(cfg, config.KeybindingGroupReasoning, "select"),
+		Next:     common.Binding(cfg, config.KeybindingGroupReasoning, "next"),
+		Previous: common.Binding(cfg, config.KeybindingGroupReasoning, "previous"),
+		UpDown:   common.Binding(cfg, config.KeybindingGroupReasoning, "up_down"),
+		Close:    closeBinding(com),
 	}
 }
 
@@ -78,23 +96,7 @@ func NewReasoning(com *common.Common) (*Reasoning, error) {
 	r.input.SetStyles(com.Styles.TextInput)
 	r.input.Focus()
 
-	r.keyMap.Select = key.NewBinding(
-		key.WithKeys("enter", "ctrl+y"),
-		key.WithHelp("enter", "confirm"),
-	)
-	r.keyMap.Next = key.NewBinding(
-		key.WithKeys("down", "ctrl+n"),
-		key.WithHelp("↓", "next item"),
-	)
-	r.keyMap.Previous = key.NewBinding(
-		key.WithKeys("up", "ctrl+p"),
-		key.WithHelp("↑", "previous item"),
-	)
-	r.keyMap.UpDown = key.NewBinding(
-		key.WithKeys("up", "down"),
-		key.WithHelp("↑/↓", "choose"),
-	)
-	r.keyMap.Close = CloseKey
+	r.keyMap = defaultReasoningKeyMap(com)
 
 	if err := r.setReasoningItems(); err != nil {
 		return nil, err

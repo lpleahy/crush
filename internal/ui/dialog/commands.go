@@ -105,31 +105,13 @@ func NewCommands(com *common.Common, sessionID string, hasSession, hasTodos, has
 	c.input.SetStyles(com.Styles.TextInput)
 	c.input.Focus()
 
-	c.keyMap.Select = key.NewBinding(
-		key.WithKeys("enter", "ctrl+y"),
-		key.WithHelp("enter", "confirm"),
-	)
-	c.keyMap.UpDown = key.NewBinding(
-		key.WithKeys("up", "down"),
-		key.WithHelp("↑/↓", "choose"),
-	)
-	c.keyMap.Next = key.NewBinding(
-		key.WithKeys("down"),
-		key.WithHelp("↓", "next item"),
-	)
-	c.keyMap.Previous = key.NewBinding(
-		key.WithKeys("up", "ctrl+p"),
-		key.WithHelp("↑", "previous item"),
-	)
-	c.keyMap.Tab = key.NewBinding(
-		key.WithKeys("tab"),
-		key.WithHelp("tab", "switch selection"),
-	)
-	c.keyMap.ShiftTab = key.NewBinding(
-		key.WithKeys("shift+tab"),
-		key.WithHelp("shift+tab", "switch selection prev"),
-	)
-	closeKey := CloseKey
+	c.keyMap.Select = common.Binding(com.Config(), config.KeybindingGroupCommands, "select")
+	c.keyMap.UpDown = common.Binding(com.Config(), config.KeybindingGroupCommands, "up_down")
+	c.keyMap.Next = common.Binding(com.Config(), config.KeybindingGroupCommands, "next")
+	c.keyMap.Previous = common.Binding(com.Config(), config.KeybindingGroupCommands, "previous")
+	c.keyMap.Tab = common.Binding(com.Config(), config.KeybindingGroupCommands, "tab")
+	c.keyMap.ShiftTab = common.Binding(com.Config(), config.KeybindingGroupCommands, "shift_tab")
+	closeKey := closeBinding(com)
 	closeKey.SetHelp("esc", "cancel")
 	c.keyMap.Close = closeKey
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net/http"
 	"net/url"
@@ -228,6 +229,100 @@ type TUIOptions struct {
 	VimIndent   *VimIndent  `json:"vim_indent,omitempty" jsonschema:"description=Indent unit for the vim >> / << operators in the composer. Defaults to 2 spaces."`
 	Completions Completions `json:"completions,omitzero" jsonschema:"description=Completions UI options"`
 	Transparent *bool       `json:"transparent,omitempty" jsonschema:"description=Enable transparent background for the TUI interface,default=false"`
+
+	// Keybindings overrides default TUI key bindings, grouped by area.
+	// Shape: {"<group>": {"<action>": ["key", ...]}}. Every group in
+	// config.KeybindingCatalog is honored — global app-level chords
+	// (models, commands, sessions), the editor and chat surfaces, the
+	// onboarding prompt, and the overlay dialogs/completions — since
+	// each keymap is built from that catalog. An action set to an empty
+	// list falls back to its default. Keys use bubbletea spelling, e.g.
+	// "ctrl+l", "shift+tab", "alt+m".
+	Keybindings map[string]map[string][]string `json:"keybindings,omitempty" jsonschema:"description=Override default TUI keybindings\\, grouped by area (e.g. global). Shape: {group: {action: [keys]}}."`
+}
+
+// Keybinding groups and actions. Every group in KeybindingCatalog is
+// wired and overridable; the constants document the global namespace
+// here, with the remaining groups declared alongside their actions in
+// keybindings.go and keybindings_dialogs.go.
+const KeybindingGroupGlobal = "global"
+
+// Global keybinding action names — the stable strings users put under
+// options.tui.keybindings.global. Kept here (not in the ui package) so
+// config validation can check against them without importing ui.
+const (
+	KeybindActionQuit       = "quit"
+	KeybindActionHelp       = "help"
+	KeybindActionCommands   = "commands"
+	KeybindActionModels     = "models"
+	KeybindActionSuspend    = "suspend"
+	KeybindActionSessions   = "sessions"
+	KeybindActionTab        = "tab"
+	KeybindActionToggleYolo = "toggle_yolo"
+)
+
+// GlobalKeybindActions lists every recognized global action, used for
+// config validation and the `crush keybindings` listing.
+var GlobalKeybindActions = []string{
+	KeybindActionQuit,
+	KeybindActionHelp,
+	KeybindActionCommands,
+	KeybindActionModels,
+	KeybindActionSuspend,
+	KeybindActionSessions,
+	KeybindActionTab,
+	KeybindActionToggleYolo,
+}
+
+// ValidateKeybindings logs a warning for any configured group or
+// action that crush doesn't recognize. It never errors — an unknown
+// entry is simply inert, so a config written against a newer crush (or
+// with a typo) still loads. Returns the count of unknown entries
+// (useful for tests).
+func (c *Config) ValidateKeybindings() int {
+	if c == nil || c.Options == nil || c.Options.TUI == nil {
+		return 0
+	}
+	groups := c.Options.TUI.Keybindings
+	if len(groups) == 0 {
+		return 0
+	}
+	known := knownKeybindings()
+	unknown := 0
+	for group, actions := range groups {
+		knownActions, groupKnown := known[group]
+		if !groupKnown {
+			slog.Warn("Unknown keybinding group; entries ignored", "group", group)
+			unknown += len(actions)
+			continue
+		}
+		for action := range actions {
+			if !knownActions[action] {
+				slog.Warn("Unknown keybinding action; ignored", "group", group, "action", action)
+				unknown++
+			}
+		}
+	}
+	return unknown
+}
+
+// ResolveKeybinding returns the configured override keys for
+// group.action from Options.TUI.Keybindings, or defaults if there's no
+// non-empty override. Safe on a nil Config.
+func (c *Config) ResolveKeybinding(group, action string, defaults ...string) []string {
+	if c == nil || c.Options == nil || c.Options.TUI == nil {
+		return defaults
+	}
+	groups := c.Options.TUI.Keybindings
+	if groups == nil {
+		return defaults
+	}
+	if actions, ok := groups[group]; ok {
+		if keys, ok := actions[action]; ok && len(keys) > 0 {
+			return keys
+		}
+	}
+	return defaults
 }
 
 // VimIndent configures the unit one vim shift (>> / << / visual > <) applies

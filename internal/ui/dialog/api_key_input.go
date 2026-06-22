@@ -89,11 +89,8 @@ func NewAPIKeyInput(
 	m.help = help.New()
 	m.help.Styles = t.DialogHelpStyles()
 
-	m.keyMap.Submit = key.NewBinding(
-		key.WithKeys("enter", "ctrl+y"),
-		key.WithHelp("enter", "submit"),
-	)
-	m.keyMap.Close = CloseKey
+	m.keyMap.Submit = common.Binding(com.Config(), config.KeybindingGroupAPIKey, "submit")
+	m.keyMap.Close = closeBinding(com)
 
 	return &m, nil
 }
