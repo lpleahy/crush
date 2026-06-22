@@ -221,11 +221,46 @@ type LSPConfig struct {
 type TUIOptions struct {
 	CompactMode bool   `json:"compact_mode,omitempty" jsonschema:"description=Enable compact mode for the TUI interface,default=false"`
 	DiffMode    string `json:"diff_mode,omitempty" jsonschema:"description=Diff mode for the TUI interface,enum=unified,enum=split"`
-	// Here we can add themes later or any TUI related options
-	//
+	Theme       string `json:"theme,omitempty" jsonschema:"description=TUI color theme name. Empty or auto uses the provider-aware default. Built-in themes include auto charmtone-pantera hypercrush-obsidiana and tokyonight-storm. Custom themes can be selected by name.,default=auto"`
 
 	Completions Completions `json:"completions,omitzero" jsonschema:"description=Completions UI options"`
 	Transparent *bool       `json:"transparent,omitempty" jsonschema:"description=Enable transparent background for the TUI interface,default=false"`
+}
+
+type Themes map[string]ThemeConfig
+
+type ThemeConfig struct {
+	Extends string `json:"extends,omitempty" jsonschema:"description=Built-in theme to use as the base before applying custom colors,enum=auto,enum=charmtone-pantera,enum=hypercrush-obsidiana,enum=tokyonight-storm,default=auto"`
+
+	Primary   string `json:"primary,omitempty" jsonschema:"description=Primary brand/accent color,pattern=^#([0-9a-fA-F]{6})$,example=#7aa2f7"`
+	Secondary string `json:"secondary,omitempty" jsonschema:"description=Secondary brand/accent color,pattern=^#([0-9a-fA-F]{6})$,example=#bb9af7"`
+	Accent    string `json:"accent,omitempty" jsonschema:"description=General accent color,pattern=^#([0-9a-fA-F]{6})$,example=#7dcfff"`
+	Keyword   string `json:"keyword,omitempty" jsonschema:"description=Keyword/syntax accent color,pattern=^#([0-9a-fA-F]{6})$,example=#9d7cd8"`
+
+	FgBase       string `json:"fg_base,omitempty" jsonschema:"description=Default foreground color,pattern=^#([0-9a-fA-F]{6})$,example=#c0caf5"`
+	FgSubtle     string `json:"fg_subtle,omitempty" jsonschema:"description=Subtle foreground color,pattern=^#([0-9a-fA-F]{6})$,example=#a9b1d6"`
+	FgMoreSubtle string `json:"fg_more_subtle,omitempty" jsonschema:"description=More subtle foreground color,pattern=^#([0-9a-fA-F]{6})$,example=#737aa2"`
+	FgMostSubtle string `json:"fg_most_subtle,omitempty" jsonschema:"description=Most subtle foreground color,pattern=^#([0-9a-fA-F]{6})$,example=#565f89"`
+	OnPrimary    string `json:"on_primary,omitempty" jsonschema:"description=Foreground color used on primary backgrounds,pattern=^#([0-9a-fA-F]{6})$,example=#1b1e2d"`
+
+	BgBase         string `json:"bg_base,omitempty" jsonschema:"description=Default background color,pattern=^#([0-9a-fA-F]{6})$,example=#24283b"`
+	BgLeastVisible string `json:"bg_least_visible,omitempty" jsonschema:"description=Least visible elevated background color,pattern=^#([0-9a-fA-F]{6})$,example=#1f2335"`
+	BgLessVisible  string `json:"bg_less_visible,omitempty" jsonschema:"description=Less visible elevated background color,pattern=^#([0-9a-fA-F]{6})$,example=#292e42"`
+	BgMostVisible  string `json:"bg_most_visible,omitempty" jsonschema:"description=Most visible elevated background color,pattern=^#([0-9a-fA-F]{6})$,example=#3b4261"`
+	Separator      string `json:"separator,omitempty" jsonschema:"description=Separator and divider color,pattern=^#([0-9a-fA-F]{6})$,example=#3b4261"`
+
+	Destructive       string `json:"destructive,omitempty" jsonschema:"description=Destructive action color,pattern=^#([0-9a-fA-F]{6})$,example=#db4b4b"`
+	Error             string `json:"error,omitempty" jsonschema:"description=Error color,pattern=^#([0-9a-fA-F]{6})$,example=#f7768e"`
+	Warning           string `json:"warning,omitempty" jsonschema:"description=Warning color,pattern=^#([0-9a-fA-F]{6})$,example=#ff9e64"`
+	WarningSubtle     string `json:"warning_subtle,omitempty" jsonschema:"description=Subtle warning color,pattern=^#([0-9a-fA-F]{6})$,example=#e0af68"`
+	Denied            string `json:"denied,omitempty" jsonschema:"description=Denied permission color,pattern=^#([0-9a-fA-F]{6})$,example=#db4b4b"`
+	Busy              string `json:"busy,omitempty" jsonschema:"description=Busy/progress color,pattern=^#([0-9a-fA-F]{6})$,example=#e0af68"`
+	Info              string `json:"info,omitempty" jsonschema:"description=Informational color,pattern=^#([0-9a-fA-F]{6})$,example=#7aa2f7"`
+	InfoMoreSubtle    string `json:"info_more_subtle,omitempty" jsonschema:"description=More subtle informational color,pattern=^#([0-9a-fA-F]{6})$,example=#3d59a1"`
+	InfoMostSubtle    string `json:"info_most_subtle,omitempty" jsonschema:"description=Most subtle informational color,pattern=^#([0-9a-fA-F]{6})$,example=#394b70"`
+	Success           string `json:"success,omitempty" jsonschema:"description=Success color,pattern=^#([0-9a-fA-F]{6})$,example=#9ece6a"`
+	SuccessMoreSubtle string `json:"success_more_subtle,omitempty" jsonschema:"description=More subtle success color,pattern=^#([0-9a-fA-F]{6})$,example=#41a6b5"`
+	SuccessMostSubtle string `json:"success_most_subtle,omitempty" jsonschema:"description=Most subtle success color,pattern=^#([0-9a-fA-F]{6})$,example=#73daca"`
 }
 
 // Completions defines options for the completions UI.
@@ -603,6 +638,8 @@ type Config struct {
 	Permissions *Permissions `json:"permissions,omitempty" jsonschema:"description=Permission settings for tool usage"`
 
 	Tools Tools `json:"tools,omitzero" jsonschema:"description=Tool configurations"`
+
+	Themes Themes `json:"themes,omitempty" jsonschema:"description=Custom TUI theme definitions keyed by theme name"`
 
 	Hooks map[string][]HookConfig `json:"hooks,omitempty" jsonschema:"description=User-defined shell commands that fire on hook events (e.g. PreToolUse)"`
 

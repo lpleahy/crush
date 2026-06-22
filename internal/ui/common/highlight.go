@@ -33,16 +33,19 @@ func SyntaxHighlight(st *styles.Styles, source, fileName string, bg color.Color)
 
 	style := chroma.MustNewStyle("crush", st.ChromaTheme())
 
-	// Modify the style to use the provided background
-	s, err := style.Builder().Transform(
-		func(t chroma.StyleEntry) chroma.StyleEntry {
-			r, g, b, _ := bg.RGBA()
-			t.Background = chroma.NewColour(uint8(r>>8), uint8(g>>8), uint8(b>>8))
-			return t
-		},
-	).Build()
-	if err != nil {
-		s = chromastyles.Fallback
+	s := style
+	if bg != nil {
+		var err error
+		s, err = style.Builder().Transform(
+			func(t chroma.StyleEntry) chroma.StyleEntry {
+				r, g, b, _ := bg.RGBA()
+				t.Background = chroma.NewColour(uint8(r>>8), uint8(g>>8), uint8(b>>8))
+				return t
+			},
+		).Build()
+		if err != nil {
+			s = chromastyles.Fallback
+		}
 	}
 
 	// Tokenize and format

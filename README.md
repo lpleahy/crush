@@ -266,6 +266,39 @@ $HOME/.local/share/crush/crush.json
 > - `CRUSH_GLOBAL_CONFIG`
 > - `CRUSH_GLOBAL_DATA`
 
+### Themes
+
+Crush includes built-in TUI themes and can load custom themes from config. Set
+`options.tui.theme` to `auto`, `charmtone-pantera`, `hypercrush-obsidiana`,
+`tokyonight-storm`, or the name of a custom entry under `themes`.
+
+```json
+{
+  "$schema": "https://charm.land/crush.json",
+  "options": {
+    "tui": {
+      "theme": "my-theme"
+    }
+  },
+  "themes": {
+    "my-theme": {
+      "extends": "tokyonight-storm",
+      "primary": "#7aa2f7",
+      "secondary": "#bb9af7",
+      "accent": "#7dcfff",
+      "fg_base": "#c0caf5",
+      "bg_base": "#24283b",
+      "bg_less_visible": "#292e42",
+      "success": "#9ece6a",
+      "error": "#f7768e"
+    }
+  }
+}
+```
+
+Custom themes are semantic palettes: any omitted color inherits from `extends`
+(or from the provider-aware default when `extends` is empty or `auto`).
+
 ### LSPs
 
 Crush can use LSPs for additional context to help inform its decisions, just
