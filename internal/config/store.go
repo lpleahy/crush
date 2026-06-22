@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/crush/internal/oauth"
 	"github.com/charmbracelet/crush/internal/oauth/copilot"
 	"github.com/charmbracelet/crush/internal/oauth/hyper"
+	"github.com/charmbracelet/crush/internal/oauth/openai"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -336,6 +337,8 @@ func (s *ConfigStore) SetProviderAPIKey(scope Scope, providerID string, apiKey a
 			switch providerID {
 			case string(catwalk.InferenceProviderCopilot):
 				providerConfig.SetupGitHubCopilot()
+			case string(catwalk.InferenceProviderChatGPT):
+				providerConfig.SetupChatGPT()
 			}
 		}
 	}
@@ -414,6 +417,8 @@ func (s *ConfigStore) RefreshOAuthToken(ctx context.Context, scope Scope, provid
 	switch providerID {
 	case string(catwalk.InferenceProviderCopilot):
 		refreshedToken, refreshErr = copilot.RefreshToken(ctx, providerConfig.OAuthToken.RefreshToken)
+	case string(catwalk.InferenceProviderChatGPT):
+		refreshedToken, refreshErr = openai.RefreshToken(ctx, providerConfig.OAuthToken.RefreshToken)
 	case hyperp.Name:
 		refreshedToken, refreshErr = hyper.ExchangeToken(ctx, providerConfig.OAuthToken.RefreshToken)
 	default:
@@ -444,6 +449,8 @@ func (s *ConfigStore) RefreshOAuthToken(ctx context.Context, scope Scope, provid
 	switch providerID {
 	case string(catwalk.InferenceProviderCopilot):
 		providerConfig.SetupGitHubCopilot()
+	case string(catwalk.InferenceProviderChatGPT):
+		providerConfig.SetupChatGPT()
 	}
 
 	s.config.Providers.Set(providerID, providerConfig)
@@ -462,8 +469,11 @@ func (s *ConfigStore) RefreshOAuthToken(ctx context.Context, scope Scope, provid
 func (s *ConfigStore) applyToken(providerConfig ProviderConfig, token *oauth.Token, providerID string) error {
 	providerConfig.OAuthToken = token
 	providerConfig.APIKey = token.AccessToken
-	if providerID == string(catwalk.InferenceProviderCopilot) {
+	switch providerID {
+	case string(catwalk.InferenceProviderCopilot):
 		providerConfig.SetupGitHubCopilot()
+	case string(catwalk.InferenceProviderChatGPT):
+		providerConfig.SetupChatGPT()
 	}
 	s.config.Providers.Set(providerID, providerConfig)
 	return nil

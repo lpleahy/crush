@@ -218,6 +218,21 @@ Crush:
 - [Kimi Code](https://www.kimi.com/membership/pricing)
 - [MiniMax Coding Plan](https://platform.minimax.io/subscribe/coding-plan)
 
+Crush also supports OAuth sign-in for subscription products that don't use API
+keys: `crush login chatgpt` (ChatGPT Plus/Pro/Team/Enterprise), `crush login
+copilot` (GitHub Copilot), and `crush login hyper` (Charm Hyper). See
+`crush login --help` for the full list and `--no-browser` for SSH/headless flows.
+
+> [!NOTE]
+> Sign-in-with-ChatGPT uses the same public OAuth flow as OpenAI's official
+> Codex CLI. Access to the ChatGPT backend is governed by your OpenAI
+> subscription's Terms of Use and Usage Policies; you are responsible for
+> compliance, and OpenAI may rate-limit, revoke, or suspend access at any
+> time. This feature is for personal use with your own ChatGPT
+> Plus/Pro/Team/Enterprise subscription — for commercial or production
+> workloads, use an OpenAI Platform API key (`OPENAI_API_KEY`). Crush is not
+> affiliated with or endorsed by OpenAI.
+
 ### By the Way
 
 Is there a provider you’d like to see in Crush? Is there an existing model that needs an update?

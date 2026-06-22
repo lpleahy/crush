@@ -33,6 +33,7 @@ import (
 	"github.com/charmbracelet/crush/internal/lsp"
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/oauth/copilot"
+	chatgptauth "github.com/charmbracelet/crush/internal/oauth/openai"
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/charmbracelet/crush/internal/session"
@@ -359,6 +360,10 @@ func (c *coordinator) run(ctx context.Context, accept *AcceptedRun, sessionID st
 	// runID is extracted at function entry above. Both attempts in the
 	// retry chain reuse it; the coalesce closure publishes the final
 	// outcome under that same correlator.
+
+	// Tag the run context so the chatgpt transport derives a stable
+	// session-id, thread-id, and prompt_cache_key per session.
+	ctx = chatgptauth.WithSession(ctx, sessionID)
 	run := func() (*fantasy.AgentResult, error) {
 		return c.currentAgent.Run(ctx, SessionAgentCall{
 			SessionID:        sessionID,
@@ -1004,6 +1009,9 @@ func (c *coordinator) buildOpenaiCompatProvider(baseURL, apiKey string, headers 
 			}),
 		)
 		httpClient = copilot.NewClient(isSubAgent, c.cfg.Config().Options.Debug)
+	case string(catwalk.InferenceProviderChatGPT):
+		opts = append(opts, openaicompat.WithUseResponsesAPI())
+		httpClient = chatgptauth.NewHTTPClient(c.cfg.Config().Options.Debug)
 	}
 	if httpClient == nil && c.cfg.Config().Options.Debug {
 		httpClient = log.NewHTTPClient()
@@ -1391,6 +1399,11 @@ func (c *coordinator) runSubAgent(ctx context.Context, params subAgentParams) (f
 		return fantasy.ToolResponse{}, errModelProviderNotConfigured
 	}
 
+	// Tag the sub-agent's run context with its own (child) session
+	// ID so the chatgpt transport scopes IDs to this sub-conversation.
+	// Sub-agents intentionally get different IDs than the parent —
+	// they're logically separate conversations.
+	ctx = chatgptauth.WithSession(ctx, session.ID)
 	// Run the agent
 	run := func() (*fantasy.AgentResult, error) {
 		return params.Agent.Run(ctx, SessionAgentCall{

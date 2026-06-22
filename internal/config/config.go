@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/crush/internal/csync"
 	"github.com/charmbracelet/crush/internal/oauth"
 	"github.com/charmbracelet/crush/internal/oauth/copilot"
+	"github.com/charmbracelet/crush/internal/oauth/openai"
 	"github.com/invopop/jsonschema"
 )
 
@@ -177,6 +178,22 @@ func (c *ProviderConfig) ToProvider() catwalk.Provider {
 
 func (c *ProviderConfig) SetupGitHubCopilot() {
 	maps.Copy(c.ExtraHeaders, copilot.Headers())
+}
+
+// SetupChatGPT merges the ChatGPT backend's static headers (originator,
+// User-Agent, ChatGPT-Account-ID) into ExtraHeaders. Per-request
+// headers (session-id, thread-id, x-client-request-id) and body
+// reshaping are handled by the chatgpt transport from
+// internal/oauth/openai. Call this whenever OAuthToken is set or
+// rotated — ChatGPT-Account-ID is derived from the JWT.
+func (c *ProviderConfig) SetupChatGPT() {
+	if c.OAuthToken == nil {
+		return
+	}
+	if c.ExtraHeaders == nil {
+		c.ExtraHeaders = make(map[string]string)
+	}
+	maps.Copy(c.ExtraHeaders, openai.StaticHeaders(c.OAuthToken))
 }
 
 type MCPType string
