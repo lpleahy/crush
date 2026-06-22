@@ -755,6 +755,19 @@
           "type": "boolean",
           "description": "Enable transparent background for the TUI interface",
           "default": false
+        },
+        "keybindings": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object"
+          },
+          "type": "object",
+          "description": "Override default TUI keybindings, grouped by area (e.g. global). Shape: {group: {action: [keys]}}."
         }
       },
       "additionalProperties": false,

@@ -28,6 +28,9 @@ type Common struct {
 
 // Config returns the pure-data configuration associated with this [Common] instance.
 func (c *Common) Config() *config.Config {
+	if c == nil || c.Workspace == nil {
+		return nil
+	}
 	return c.Workspace.Config()
 }
 

@@ -1,6 +1,10 @@
 package model
 
-import "charm.land/bubbles/v2/key"
+import (
+	"charm.land/bubbles/v2/key"
+	"github.com/charmbracelet/crush/internal/config"
+	"github.com/charmbracelet/crush/internal/ui/common"
+)
 
 type KeyMap struct {
 	Editor struct {
@@ -69,213 +73,75 @@ type KeyMap struct {
 	ToggleYolo key.Binding
 }
 
-func DefaultKeyMap() KeyMap {
-	km := KeyMap{
-		Quit: key.NewBinding(
-			key.WithKeys("ctrl+c"),
-			key.WithHelp("ctrl+c", "quit"),
-		),
-		Help: key.NewBinding(
-			key.WithKeys("ctrl+g"),
-			key.WithHelp("ctrl+g", "more"),
-		),
-		Commands: key.NewBinding(
-			key.WithKeys("ctrl+p"),
-			key.WithHelp("ctrl+p", "commands"),
-		),
-		Models: key.NewBinding(
-			key.WithKeys("ctrl+m", "ctrl+l"),
-			key.WithHelp("ctrl+l", "models"),
-		),
-		Suspend: key.NewBinding(
-			key.WithKeys("ctrl+z"),
-			key.WithHelp("ctrl+z", "suspend"),
-		),
-		Sessions: key.NewBinding(
-			key.WithKeys("ctrl+s"),
-			key.WithHelp("ctrl+s", "sessions"),
-		),
-		Tab: key.NewBinding(
-			key.WithKeys("tab"),
-			key.WithHelp("tab", "change focus"),
-		),
-		ToggleYolo: key.NewBinding(
-			key.WithKeys("ctrl+y"),
-			key.WithHelp("ctrl+y", "toggle yolo"),
-		),
+// DefaultKeyMap builds the keymap, applying any keybinding overrides
+// from cfg (options.tui.keybindings.<group>). Every binding's defaults
+// and help metadata come from config.KeybindingCatalog, so the keys here
+// stay in lockstep with the `crush keybindings` listing. Pass nil for
+// pure defaults (tests, headless).
+func DefaultKeyMap(cfg *config.Config) KeyMap {
+	b := func(group, action string) key.Binding {
+		return common.Binding(cfg, group, action)
 	}
 
-	km.Editor.AddFile = key.NewBinding(
-		key.WithKeys("/"),
-		key.WithHelp("/", "add file"),
-	)
-	km.Editor.SendMessage = key.NewBinding(
-		key.WithKeys("enter"),
-		key.WithHelp("enter", "send"),
-	)
-	km.Editor.OpenEditor = key.NewBinding(
-		key.WithKeys("ctrl+o"),
-		key.WithHelp("ctrl+o", "open editor"),
-	)
-	km.Editor.Newline = key.NewBinding(
-		key.WithKeys("shift+enter", "ctrl+j"),
-		// "ctrl+j" is a common keybinding for newline in many editors. If
-		// the terminal supports "shift+enter", we substitute the help tex
-		// to reflect that.
-		key.WithHelp("ctrl+j", "newline"),
-	)
-	km.Editor.AddImage = key.NewBinding(
-		key.WithKeys("ctrl+f"),
-		key.WithHelp("ctrl+f", "add image"),
-	)
-	km.Editor.PasteImage = key.NewBinding(
-		key.WithKeys("ctrl+v", "super+v"),
-		key.WithHelp("ctrl+v", "paste image from clipboard"),
-	)
-	km.Editor.MentionFile = key.NewBinding(
-		key.WithKeys("@"),
-		key.WithHelp("@", "mention file"),
-	)
-	km.Editor.Commands = key.NewBinding(
-		key.WithKeys("/"),
-		key.WithHelp("/", "commands"),
-	)
-	km.Editor.AttachmentDeleteMode = key.NewBinding(
-		key.WithKeys("ctrl+r"),
-		key.WithHelp("ctrl+r+{i}", "delete attachment at index i"),
-	)
-	km.Editor.Escape = key.NewBinding(
-		key.WithKeys("esc", "alt+esc"),
-		key.WithHelp("esc", "cancel delete mode"),
-	)
-	km.Editor.DeleteAllAttachments = key.NewBinding(
-		key.WithKeys("r"),
-		key.WithHelp("ctrl+r+r", "delete all attachments"),
-	)
-	km.Editor.HistoryPrev = key.NewBinding(
-		key.WithKeys("up"),
-	)
-	km.Editor.HistoryNext = key.NewBinding(
-		key.WithKeys("down"),
-	)
+	var km KeyMap
 
-	km.Chat.NewSession = key.NewBinding(
-		key.WithKeys("ctrl+n"),
-		key.WithHelp("ctrl+n", "new session"),
-	)
-	km.Chat.AddAttachment = key.NewBinding(
-		key.WithKeys("ctrl+f"),
-		key.WithHelp("ctrl+f", "add attachment"),
-	)
-	km.Chat.Cancel = key.NewBinding(
-		key.WithKeys("esc", "alt+esc"),
-		key.WithHelp("esc", "cancel"),
-	)
-	km.Chat.Tab = key.NewBinding(
-		key.WithKeys("tab"),
-		key.WithHelp("tab", "change focus"),
-	)
-	km.Chat.Details = key.NewBinding(
-		key.WithKeys("ctrl+d"),
-		key.WithHelp("ctrl+d", "toggle details"),
-	)
-	km.Chat.TogglePills = key.NewBinding(
-		key.WithKeys("ctrl+t", "ctrl+space"),
-		key.WithHelp("ctrl+t", "toggle tasks"),
-	)
-	km.Chat.PillLeft = key.NewBinding(
-		key.WithKeys("left"),
-		key.WithHelp("←/→", "switch section"),
-	)
-	km.Chat.PillRight = key.NewBinding(
-		key.WithKeys("right"),
-		key.WithHelp("←/→", "switch section"),
-	)
+	// Global
+	km.Quit = b(config.KeybindingGroupGlobal, config.KeybindActionQuit)
+	km.Help = b(config.KeybindingGroupGlobal, config.KeybindActionHelp)
+	km.Commands = b(config.KeybindingGroupGlobal, config.KeybindActionCommands)
+	km.Models = b(config.KeybindingGroupGlobal, config.KeybindActionModels)
+	km.Suspend = b(config.KeybindingGroupGlobal, config.KeybindActionSuspend)
+	km.Sessions = b(config.KeybindingGroupGlobal, config.KeybindActionSessions)
+	km.Tab = b(config.KeybindingGroupGlobal, config.KeybindActionTab)
+	km.ToggleYolo = b(config.KeybindingGroupGlobal, config.KeybindActionToggleYolo)
 
-	km.Chat.Down = key.NewBinding(
-		key.WithKeys("down", "ctrl+j", "j"),
-		key.WithHelp("↓", "down"),
-	)
-	km.Chat.Up = key.NewBinding(
-		key.WithKeys("up", "ctrl+k", "k"),
-		key.WithHelp("↑", "up"),
-	)
-	km.Chat.UpDown = key.NewBinding(
-		key.WithKeys("up", "down"),
-		key.WithHelp("↑↓", "scroll"),
-	)
-	km.Chat.UpOneItem = key.NewBinding(
-		key.WithKeys("shift+up", "K"),
-		key.WithHelp("shift+↑", "up one item"),
-	)
-	km.Chat.DownOneItem = key.NewBinding(
-		key.WithKeys("shift+down", "J"),
-		key.WithHelp("shift+↓", "down one item"),
-	)
-	km.Chat.UpDownOneItem = key.NewBinding(
-		key.WithKeys("shift+up", "shift+down"),
-		key.WithHelp("shift+↑↓", "scroll one item"),
-	)
-	km.Chat.HalfPageDown = key.NewBinding(
-		key.WithKeys("d"),
-		key.WithHelp("d", "half page down"),
-	)
-	km.Chat.PageDown = key.NewBinding(
-		key.WithKeys("pgdown", " ", "f"),
-		key.WithHelp("f/pgdn", "page down"),
-	)
-	km.Chat.PageUp = key.NewBinding(
-		key.WithKeys("pgup", "b"),
-		key.WithHelp("b/pgup", "page up"),
-	)
-	km.Chat.HalfPageUp = key.NewBinding(
-		key.WithKeys("u"),
-		key.WithHelp("u", "half page up"),
-	)
-	km.Chat.Home = key.NewBinding(
-		key.WithKeys("g", "home"),
-		key.WithHelp("g", "home"),
-	)
-	km.Chat.End = key.NewBinding(
-		key.WithKeys("G", "end"),
-		key.WithHelp("G", "end"),
-	)
-	km.Chat.Copy = key.NewBinding(
-		key.WithKeys("c", "y", "C", "Y"),
-		key.WithHelp("c/y", "copy"),
-	)
-	km.Chat.ClearHighlight = key.NewBinding(
-		key.WithKeys("esc", "alt+esc"),
-		key.WithHelp("esc", "clear selection"),
-	)
-	km.Chat.Expand = key.NewBinding(
-		key.WithKeys("space"),
-		key.WithHelp("space", "expand/collapse"),
-	)
-	km.Chat.ScrollLeft = key.NewBinding(
-		key.WithKeys("shift+left", "H"),
-		key.WithHelp("shift+←/H", "scroll left"),
-	)
-	km.Chat.ScrollRight = key.NewBinding(
-		key.WithKeys("shift+right", "L"),
-		key.WithHelp("shift+→/L", "scroll right"),
-	)
-	km.Initialize.Yes = key.NewBinding(
-		key.WithKeys("y", "Y"),
-		key.WithHelp("y", "yes"),
-	)
-	km.Initialize.No = key.NewBinding(
-		key.WithKeys("n", "N", "esc", "alt+esc"),
-		key.WithHelp("n", "no"),
-	)
-	km.Initialize.Switch = key.NewBinding(
-		key.WithKeys("left", "right", "tab"),
-		key.WithHelp("tab", "switch"),
-	)
-	km.Initialize.Enter = key.NewBinding(
-		key.WithKeys("enter"),
-		key.WithHelp("enter", "select"),
-	)
+	// Editor
+	km.Editor.AddFile = b(config.KeybindingGroupEditor, config.KeybindActionEditorAddFile)
+	km.Editor.SendMessage = b(config.KeybindingGroupEditor, config.KeybindActionEditorSendMessage)
+	km.Editor.OpenEditor = b(config.KeybindingGroupEditor, config.KeybindActionEditorOpenEditor)
+	km.Editor.Newline = b(config.KeybindingGroupEditor, config.KeybindActionEditorNewline)
+	km.Editor.AddImage = b(config.KeybindingGroupEditor, config.KeybindActionEditorAddImage)
+	km.Editor.PasteImage = b(config.KeybindingGroupEditor, config.KeybindActionEditorPasteImage)
+	km.Editor.MentionFile = b(config.KeybindingGroupEditor, config.KeybindActionEditorMentionFile)
+	km.Editor.Commands = b(config.KeybindingGroupEditor, config.KeybindActionEditorCommands)
+	km.Editor.AttachmentDeleteMode = b(config.KeybindingGroupEditor, config.KeybindActionEditorAttachmentDeleteMode)
+	km.Editor.Escape = b(config.KeybindingGroupEditor, config.KeybindActionEditorEscape)
+	km.Editor.DeleteAllAttachments = b(config.KeybindingGroupEditor, config.KeybindActionEditorDeleteAllAttachments)
+	km.Editor.HistoryPrev = b(config.KeybindingGroupEditor, config.KeybindActionEditorHistoryPrev)
+	km.Editor.HistoryNext = b(config.KeybindingGroupEditor, config.KeybindActionEditorHistoryNext)
+
+	// Chat
+	km.Chat.NewSession = b(config.KeybindingGroupChat, config.KeybindActionChatNewSession)
+	km.Chat.AddAttachment = b(config.KeybindingGroupChat, config.KeybindActionChatAddAttachment)
+	km.Chat.Cancel = b(config.KeybindingGroupChat, config.KeybindActionChatCancel)
+	km.Chat.Tab = b(config.KeybindingGroupChat, config.KeybindActionChatTab)
+	km.Chat.Details = b(config.KeybindingGroupChat, config.KeybindActionChatDetails)
+	km.Chat.TogglePills = b(config.KeybindingGroupChat, config.KeybindActionChatTogglePills)
+	km.Chat.PillLeft = b(config.KeybindingGroupChat, config.KeybindActionChatPillLeft)
+	km.Chat.PillRight = b(config.KeybindingGroupChat, config.KeybindActionChatPillRight)
+	km.Chat.Down = b(config.KeybindingGroupChat, config.KeybindActionChatDown)
+	km.Chat.Up = b(config.KeybindingGroupChat, config.KeybindActionChatUp)
+	km.Chat.UpDown = b(config.KeybindingGroupChat, config.KeybindActionChatUpDown)
+	km.Chat.DownOneItem = b(config.KeybindingGroupChat, config.KeybindActionChatDownOneItem)
+	km.Chat.UpOneItem = b(config.KeybindingGroupChat, config.KeybindActionChatUpOneItem)
+	km.Chat.UpDownOneItem = b(config.KeybindingGroupChat, config.KeybindActionChatUpDownOneItem)
+	km.Chat.PageDown = b(config.KeybindingGroupChat, config.KeybindActionChatPageDown)
+	km.Chat.PageUp = b(config.KeybindingGroupChat, config.KeybindActionChatPageUp)
+	km.Chat.HalfPageDown = b(config.KeybindingGroupChat, config.KeybindActionChatHalfPageDown)
+	km.Chat.HalfPageUp = b(config.KeybindingGroupChat, config.KeybindActionChatHalfPageUp)
+	km.Chat.Home = b(config.KeybindingGroupChat, config.KeybindActionChatHome)
+	km.Chat.End = b(config.KeybindingGroupChat, config.KeybindActionChatEnd)
+	km.Chat.Copy = b(config.KeybindingGroupChat, config.KeybindActionChatCopy)
+	km.Chat.ClearHighlight = b(config.KeybindingGroupChat, config.KeybindActionChatClearHighlight)
+	km.Chat.Expand = b(config.KeybindingGroupChat, config.KeybindActionChatExpand)
+	km.Chat.ScrollLeft = b(config.KeybindingGroupChat, config.KeybindActionChatScrollLeft)
+	km.Chat.ScrollRight = b(config.KeybindingGroupChat, config.KeybindActionChatScrollRight)
+
+	// Initialize
+	km.Initialize.Yes = b(config.KeybindingGroupInitialize, config.KeybindActionInitializeYes)
+	km.Initialize.No = b(config.KeybindingGroupInitialize, config.KeybindActionInitializeNo)
+	km.Initialize.Switch = b(config.KeybindingGroupInitialize, config.KeybindActionInitializeSwitch)
+	km.Initialize.Enter = b(config.KeybindingGroupInitialize, config.KeybindActionInitializeEnter)
 
 	return km
 }

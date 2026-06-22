@@ -4,6 +4,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/ui/common"
 	uv "github.com/charmbracelet/ultraviolet"
 )
@@ -34,31 +35,13 @@ func NewQuit(com *common.Common) *Quit {
 		com:        com,
 		selectedNo: true,
 	}
-	q.keyMap.LeftRight = key.NewBinding(
-		key.WithKeys("left", "right"),
-		key.WithHelp("←/→", "switch options"),
-	)
-	q.keyMap.EnterSpace = key.NewBinding(
-		key.WithKeys("enter", " "),
-		key.WithHelp("enter/space", "confirm"),
-	)
-	q.keyMap.Yes = key.NewBinding(
-		key.WithKeys("y", "Y", "ctrl+c"),
-		key.WithHelp("y/Y/ctrl+c", "yes"),
-	)
-	q.keyMap.No = key.NewBinding(
-		key.WithKeys("n", "N"),
-		key.WithHelp("n/N", "no"),
-	)
-	q.keyMap.Tab = key.NewBinding(
-		key.WithKeys("tab"),
-		key.WithHelp("tab", "switch options"),
-	)
-	q.keyMap.Close = CloseKey
-	q.keyMap.Quit = key.NewBinding(
-		key.WithKeys("ctrl+c"),
-		key.WithHelp("ctrl+c", "quit"),
-	)
+	q.keyMap.LeftRight = common.Binding(com.Config(), config.KeybindingGroupQuit, "left_right")
+	q.keyMap.EnterSpace = common.Binding(com.Config(), config.KeybindingGroupQuit, "enter_space")
+	q.keyMap.Yes = common.Binding(com.Config(), config.KeybindingGroupQuit, "yes")
+	q.keyMap.No = common.Binding(com.Config(), config.KeybindingGroupQuit, "no")
+	q.keyMap.Tab = common.Binding(com.Config(), config.KeybindingGroupQuit, "tab")
+	q.keyMap.Close = closeBinding(com)
+	q.keyMap.Quit = common.Binding(com.Config(), config.KeybindingGroupQuit, "quit")
 	return q
 }
 

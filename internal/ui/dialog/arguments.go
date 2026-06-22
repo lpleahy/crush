@@ -15,6 +15,7 @@ import (
 	"golang.org/x/text/language"
 
 	"github.com/charmbracelet/crush/internal/commands"
+	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/ui/common"
 	"github.com/charmbracelet/crush/internal/ui/util"
 	uv "github.com/charmbracelet/ultraviolet"
@@ -49,8 +50,6 @@ type Arguments struct {
 		Confirm,
 		Next,
 		Previous,
-		ScrollUp,
-		ScrollDown,
 		Close key.Binding
 	}
 
@@ -72,19 +71,10 @@ func NewArguments(com *common.Common, title, description string, arguments []com
 	a.help = help.New()
 	a.help.Styles = com.Styles.DialogHelpStyles()
 
-	a.keyMap.Confirm = key.NewBinding(
-		key.WithKeys("enter"),
-		key.WithHelp("enter", "confirm"),
-	)
-	a.keyMap.Next = key.NewBinding(
-		key.WithKeys("down", "tab"),
-		key.WithHelp("↓/tab", "next"),
-	)
-	a.keyMap.Previous = key.NewBinding(
-		key.WithKeys("up", "shift+tab"),
-		key.WithHelp("↑/shift+tab", "previous"),
-	)
-	a.keyMap.Close = CloseKey
+	a.keyMap.Confirm = common.Binding(com.Config(), config.KeybindingGroupArguments, "confirm")
+	a.keyMap.Next = common.Binding(com.Config(), config.KeybindingGroupArguments, "next")
+	a.keyMap.Previous = common.Binding(com.Config(), config.KeybindingGroupArguments, "previous")
+	a.keyMap.Close = closeBinding(com)
 
 	// Create input fields for each argument.
 	a.inputs = make([]textinput.Model, len(arguments))

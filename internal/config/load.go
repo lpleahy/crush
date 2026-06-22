@@ -84,6 +84,10 @@ func Load(workingDir, dataDir string, debug bool) (*ConfigStore, error) {
 		return nil, fmt.Errorf("invalid hook configuration: %w", err)
 	}
 
+	// Warn (don't fail) on unrecognized keybinding overrides so typos
+	// are visible without blocking startup.
+	cfg.ValidateKeybindings()
+
 	if !isInsideWorktree() {
 		const depth = 2
 		const items = 100

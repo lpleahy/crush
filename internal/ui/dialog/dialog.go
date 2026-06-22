@@ -6,6 +6,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/ui/common"
 	uv "github.com/charmbracelet/ultraviolet"
 )
@@ -22,11 +23,17 @@ const (
 	inputContentHeight = 1
 )
 
-// CloseKey is the default key binding to close dialogs.
-var CloseKey = key.NewBinding(
-	key.WithKeys("esc", "alt+esc"),
-	key.WithHelp("esc", "exit"),
-)
+// closeBinding resolves the shared dialog-close binding, applying any
+// options.tui.keybindings.dialog.close override. Dialogs call this from
+// their constructors, where the *common.Common (and thus config) is
+// available.
+func closeBinding(com *common.Common) key.Binding {
+	var cfg *config.Config
+	if com != nil {
+		cfg = com.Config()
+	}
+	return common.Binding(cfg, config.KeybindingGroupDialog, "close")
+}
 
 // Action represents an action taken in a dialog after handling a message.
 type Action any

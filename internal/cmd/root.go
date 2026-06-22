@@ -72,6 +72,7 @@ func init() {
 		loginCmd,
 		statsCmd,
 		sessionCmd,
+		keybindingsCmd,
 	)
 }
 

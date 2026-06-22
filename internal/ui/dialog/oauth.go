@@ -100,15 +100,9 @@ func newOAuth(
 	m.help = help.New()
 	m.help.Styles = t.DialogHelpStyles()
 
-	m.keyMap.Copy = key.NewBinding(
-		key.WithKeys("c"),
-		key.WithHelp("c", "copy code"),
-	)
-	m.keyMap.Submit = key.NewBinding(
-		key.WithKeys("enter", "ctrl+y"),
-		key.WithHelp("enter", "copy & open"),
-	)
-	m.keyMap.Close = CloseKey
+	m.keyMap.Copy = common.Binding(com.Config(), config.KeybindingGroupOAuth, "copy")
+	m.keyMap.Submit = common.Binding(com.Config(), config.KeybindingGroupOAuth, "submit")
+	m.keyMap.Close = closeBinding(com)
 
 	return &m, tea.Batch(m.spinner.Tick, m.oAuthProvider.initiateAuth)
 }

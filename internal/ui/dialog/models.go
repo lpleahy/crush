@@ -80,18 +80,38 @@ type Models struct {
 	modelType ModelType
 	providers []catwalk.Provider
 
-	keyMap struct {
-		Tab      key.Binding
-		UpDown   key.Binding
-		Select   key.Binding
-		Edit     key.Binding
-		Next     key.Binding
-		Previous key.Binding
-		Close    key.Binding
+	keyMap modelsKeyMap
+	list   *ModelsList
+	input  textinput.Model
+	help   help.Model
+}
+
+type modelsKeyMap struct {
+	Tab      key.Binding
+	UpDown   key.Binding
+	Select   key.Binding
+	Edit     key.Binding
+	Next     key.Binding
+	Previous key.Binding
+	Close    key.Binding
+}
+
+// defaultModelsKeyMap wires the model-picker keymap from the catalog,
+// applying any options.tui.keybindings.models override.
+func defaultModelsKeyMap(com *common.Common) modelsKeyMap {
+	var cfg *config.Config
+	if com != nil {
+		cfg = com.Config()
 	}
-	list  *ModelsList
-	input textinput.Model
-	help  help.Model
+	return modelsKeyMap{
+		Tab:      common.Binding(cfg, config.KeybindingGroupModels, "tab"),
+		Select:   common.Binding(cfg, config.KeybindingGroupModels, "select"),
+		Edit:     common.Binding(cfg, config.KeybindingGroupModels, "edit"),
+		UpDown:   common.Binding(cfg, config.KeybindingGroupModels, "up_down"),
+		Next:     common.Binding(cfg, config.KeybindingGroupModels, "next"),
+		Previous: common.Binding(cfg, config.KeybindingGroupModels, "previous"),
+		Close:    closeBinding(com),
+	}
 }
 
 var _ Dialog = (*Models)(nil)
@@ -117,31 +137,7 @@ func NewModels(com *common.Common, isOnboarding bool) (*Models, error) {
 	m.input.SetStyles(com.Styles.TextInput)
 	m.input.Focus()
 
-	m.keyMap.Tab = key.NewBinding(
-		key.WithKeys("tab", "shift+tab"),
-		key.WithHelp("tab", "toggle type"),
-	)
-	m.keyMap.Select = key.NewBinding(
-		key.WithKeys("enter", "ctrl+y"),
-		key.WithHelp("enter", "confirm"),
-	)
-	m.keyMap.Edit = key.NewBinding(
-		key.WithKeys("ctrl+e"),
-		key.WithHelp("ctrl+e", "edit"),
-	)
-	m.keyMap.UpDown = key.NewBinding(
-		key.WithKeys("up", "down"),
-		key.WithHelp("↑/↓", "choose"),
-	)
-	m.keyMap.Next = key.NewBinding(
-		key.WithKeys("down", "ctrl+n"),
-		key.WithHelp("↓", "next item"),
-	)
-	m.keyMap.Previous = key.NewBinding(
-		key.WithKeys("up", "ctrl+p"),
-		key.WithHelp("↑", "previous item"),
-	)
-	m.keyMap.Close = CloseKey
+	m.keyMap = defaultModelsKeyMap(com)
 
 	var err error
 	m.providers, err = config.Providers(m.com.Config())

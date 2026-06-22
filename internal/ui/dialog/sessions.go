@@ -9,6 +9,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/session"
 	"github.com/charmbracelet/crush/internal/ui/common"
 	"github.com/charmbracelet/crush/internal/ui/list"
@@ -88,47 +89,17 @@ func NewSessions(com *common.Common, selectedSessionID string) (*Session, error)
 	s.input.SetStyles(com.Styles.TextInput)
 	s.input.Focus()
 
-	s.keyMap.Select = key.NewBinding(
-		key.WithKeys("enter", "tab", "ctrl+y"),
-		key.WithHelp("enter", "choose"),
-	)
-	s.keyMap.Next = key.NewBinding(
-		key.WithKeys("down", "ctrl+n"),
-		key.WithHelp("↓", "next item"),
-	)
-	s.keyMap.Previous = key.NewBinding(
-		key.WithKeys("up", "ctrl+p"),
-		key.WithHelp("↑", "previous item"),
-	)
-	s.keyMap.UpDown = key.NewBinding(
-		key.WithKeys("up", "down"),
-		key.WithHelp("↑↓", "choose"),
-	)
-	s.keyMap.Delete = key.NewBinding(
-		key.WithKeys("ctrl+x"),
-		key.WithHelp("ctrl+x", "delete"),
-	)
-	s.keyMap.Rename = key.NewBinding(
-		key.WithKeys("ctrl+r"),
-		key.WithHelp("ctrl+r", "rename"),
-	)
-	s.keyMap.ConfirmRename = key.NewBinding(
-		key.WithKeys("enter"),
-		key.WithHelp("enter", "confirm"),
-	)
-	s.keyMap.CancelRename = key.NewBinding(
-		key.WithKeys("esc"),
-		key.WithHelp("esc", "cancel"),
-	)
-	s.keyMap.ConfirmDelete = key.NewBinding(
-		key.WithKeys("y"),
-		key.WithHelp("y", "delete"),
-	)
-	s.keyMap.CancelDelete = key.NewBinding(
-		key.WithKeys("n", "esc"),
-		key.WithHelp("n", "cancel"),
-	)
-	s.keyMap.Close = CloseKey
+	s.keyMap.Select = common.Binding(com.Config(), config.KeybindingGroupSessions, "select")
+	s.keyMap.Next = common.Binding(com.Config(), config.KeybindingGroupSessions, "next")
+	s.keyMap.Previous = common.Binding(com.Config(), config.KeybindingGroupSessions, "previous")
+	s.keyMap.UpDown = common.Binding(com.Config(), config.KeybindingGroupSessions, "up_down")
+	s.keyMap.Delete = common.Binding(com.Config(), config.KeybindingGroupSessions, "delete")
+	s.keyMap.Rename = common.Binding(com.Config(), config.KeybindingGroupSessions, "rename")
+	s.keyMap.ConfirmRename = common.Binding(com.Config(), config.KeybindingGroupSessions, "confirm_rename")
+	s.keyMap.CancelRename = common.Binding(com.Config(), config.KeybindingGroupSessions, "cancel_rename")
+	s.keyMap.ConfirmDelete = common.Binding(com.Config(), config.KeybindingGroupSessions, "confirm_delete")
+	s.keyMap.CancelDelete = common.Binding(com.Config(), config.KeybindingGroupSessions, "cancel_delete")
+	s.keyMap.Close = closeBinding(com)
 
 	return s, nil
 }
