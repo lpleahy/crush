@@ -23,7 +23,8 @@ Crush uses JSON configuration files with the following priority (highest to lowe
   "hooks": {},
   "options": {},
   "permissions": {},
-  "tools": {}
+  "tools": {},
+  "themes": {}
 }
 ```
 

@@ -1651,6 +1651,7 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 				return util.ReportError(err)()
 			}
 			m.isTransparent = newValue
+			m.applyTheme(m.configuredTheme(cfg))
 
 			status := "disabled"
 			if newValue {
@@ -1883,8 +1884,8 @@ func (m *UI) handleSelectModel(msg dialog.ActionSelectModel) tea.Cmd {
 	} else {
 		if msg.ModelType == config.SelectedModelTypeLarge {
 			// Swap the theme live based on the newly selected large
-			// model's provider.
-			m.applyTheme(styles.ThemeForProvider(providerID))
+			// model's provider unless a theme is explicitly configured.
+			m.applyTheme(m.configuredThemeForProvider(cfg, providerID))
 		}
 		if _, ok := cfg.Models[config.SelectedModelTypeSmall]; !ok {
 			// Ensure small model is set is unset.
@@ -3714,6 +3715,30 @@ func logicalLineLengths(s string) []int {
 // cacheSidebarLogo renders and caches the sidebar logo at the specified width.
 func (m *UI) cacheSidebarLogo(width int) {
 	m.sidebarLogo = renderLogo(m.com.Styles, true, m.com.IsHyper(), width)
+}
+
+func (m *UI) configuredTheme(cfg *config.Config) styles.Styles {
+	providerID := ""
+	if cfg != nil {
+		providerID = cfg.Models[config.SelectedModelTypeLarge].Provider
+	}
+	return m.configuredThemeForProvider(cfg, providerID)
+}
+
+func (m *UI) configuredThemeForProvider(cfg *config.Config, providerID string) styles.Styles {
+	themeName := ""
+	var themes config.Themes
+	if cfg != nil {
+		themes = cfg.Themes
+		if cfg.Options != nil && cfg.Options.TUI != nil {
+			themeName = cfg.Options.TUI.Theme
+		}
+	}
+	s := styles.Theme(themeName, providerID, themes)
+	if m.isTransparent {
+		s = styles.Transparent(s)
+	}
+	return s
 }
 
 // applyTheme replaces the active styles with the given theme, drops the

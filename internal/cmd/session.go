@@ -440,11 +440,17 @@ func outputSessionJSON(w io.Writer, sess session.Session, msgs []*message.Messag
 }
 
 func outputSessionHuman(ctx context.Context, cfg *config.ConfigStore, sess session.Session, msgs []*message.Message) error {
-	var providerID string
+	var providerID, themeName string
+	var themes config.Themes
 	if cfg != nil {
-		providerID = cfg.Config().Models[config.SelectedModelTypeLarge].Provider
+		crushConfig := cfg.Config()
+		providerID = crushConfig.Models[config.SelectedModelTypeLarge].Provider
+		themes = crushConfig.Themes
+		if crushConfig.Options != nil && crushConfig.Options.TUI != nil {
+			themeName = crushConfig.Options.TUI.Theme
+		}
 	}
-	styles := styles.ThemeForProvider(providerID)
+	styles := styles.Theme(themeName, providerID, themes)
 	toolResults := chat.BuildToolResultMap(msgs)
 
 	width := sessionOutputWidth

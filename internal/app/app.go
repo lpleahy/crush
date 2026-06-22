@@ -261,7 +261,12 @@ func (app *App) RunNonInteractive(ctx context.Context, output io.Writer, prompt,
 	progress = app.config.Config().Options.Progress == nil || *app.config.Config().Options.Progress
 
 	if !hideSpinner && stderrTTY {
-		t := styles.ThemeForProvider(app.config.Config().Models[config.SelectedModelTypeLarge].Provider)
+		cfg := app.config.Config()
+		themeName := ""
+		if cfg.Options != nil && cfg.Options.TUI != nil {
+			themeName = cfg.Options.TUI.Theme
+		}
+		t := styles.Theme(themeName, cfg.Models[config.SelectedModelTypeLarge].Provider, cfg.Themes)
 
 		// Detect background color to set the appropriate color for the
 		// spinner's 'Generating...' text. Without this, that text would be

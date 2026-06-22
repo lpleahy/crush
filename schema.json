@@ -90,6 +90,10 @@
           "$ref": "#/$defs/Tools",
           "description": "Tool configurations"
         },
+        "themes": {
+          "$ref": "#/$defs/Themes",
+          "description": "Custom TUI theme definitions keyed by theme name"
+        },
         "hooks": {
           "additionalProperties": {
             "items": {
@@ -747,6 +751,11 @@
           ],
           "description": "Diff mode for the TUI interface"
         },
+        "theme": {
+          "type": "string",
+          "description": "TUI color theme name. Empty or auto uses the provider-aware default. Built-in themes include auto charmtone-pantera hypercrush-obsidiana and tokyonight-storm. Custom themes can be selected by name.",
+          "default": "auto"
+        },
         "completions": {
           "$ref": "#/$defs/Completions",
           "description": "Completions UI options"
@@ -758,6 +767,237 @@
         }
       },
       "additionalProperties": false,
+      "type": "object"
+    },
+    "ThemeConfig": {
+      "properties": {
+        "extends": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "charmtone-pantera",
+            "hypercrush-obsidiana",
+            "tokyonight-storm"
+          ],
+          "description": "Built-in theme to use as the base before applying custom colors",
+          "default": "auto"
+        },
+        "primary": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "Primary brand/accent color",
+          "examples": [
+            "#7aa2f7"
+          ]
+        },
+        "secondary": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "Secondary brand/accent color",
+          "examples": [
+            "#bb9af7"
+          ]
+        },
+        "accent": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "General accent color",
+          "examples": [
+            "#7dcfff"
+          ]
+        },
+        "keyword": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "Keyword/syntax accent color",
+          "examples": [
+            "#9d7cd8"
+          ]
+        },
+        "fg_base": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "Default foreground color",
+          "examples": [
+            "#c0caf5"
+          ]
+        },
+        "fg_subtle": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "Subtle foreground color",
+          "examples": [
+            "#a9b1d6"
+          ]
+        },
+        "fg_more_subtle": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "More subtle foreground color",
+          "examples": [
+            "#737aa2"
+          ]
+        },
+        "fg_most_subtle": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "Most subtle foreground color",
+          "examples": [
+            "#565f89"
+          ]
+        },
+        "on_primary": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "Foreground color used on primary backgrounds",
+          "examples": [
+            "#1b1e2d"
+          ]
+        },
+        "bg_base": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "Default background color",
+          "examples": [
+            "#24283b"
+          ]
+        },
+        "bg_least_visible": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "Least visible elevated background color",
+          "examples": [
+            "#1f2335"
+          ]
+        },
+        "bg_less_visible": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "Less visible elevated background color",
+          "examples": [
+            "#292e42"
+          ]
+        },
+        "bg_most_visible": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "Most visible elevated background color",
+          "examples": [
+            "#3b4261"
+          ]
+        },
+        "separator": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "Separator and divider color",
+          "examples": [
+            "#3b4261"
+          ]
+        },
+        "destructive": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "Destructive action color",
+          "examples": [
+            "#db4b4b"
+          ]
+        },
+        "error": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "Error color",
+          "examples": [
+            "#f7768e"
+          ]
+        },
+        "warning": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "Warning color",
+          "examples": [
+            "#ff9e64"
+          ]
+        },
+        "warning_subtle": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "Subtle warning color",
+          "examples": [
+            "#e0af68"
+          ]
+        },
+        "denied": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "Denied permission color",
+          "examples": [
+            "#db4b4b"
+          ]
+        },
+        "busy": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "Busy/progress color",
+          "examples": [
+            "#e0af68"
+          ]
+        },
+        "info": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "Informational color",
+          "examples": [
+            "#7aa2f7"
+          ]
+        },
+        "info_more_subtle": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "More subtle informational color",
+          "examples": [
+            "#3d59a1"
+          ]
+        },
+        "info_most_subtle": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "Most subtle informational color",
+          "examples": [
+            "#394b70"
+          ]
+        },
+        "success": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "Success color",
+          "examples": [
+            "#9ece6a"
+          ]
+        },
+        "success_more_subtle": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "More subtle success color",
+          "examples": [
+            "#41a6b5"
+          ]
+        },
+        "success_most_subtle": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6})$",
+          "description": "Most subtle success color",
+          "examples": [
+            "#73daca"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "Themes": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ThemeConfig"
+      },
       "type": "object"
     },
     "Token": {
