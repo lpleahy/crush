@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"charm.land/catwalk/pkg/catwalk"
@@ -2204,4 +2205,67 @@ func TestConfig_configureProviders_UnsetAzureEndpointSkipsProvider(t *testing.T)
 	require.Equal(t, 0, cfg.Providers.Len(), "azure provider with unset endpoint must be skipped")
 	_, exists := cfg.Providers.Get("azure")
 	require.False(t, exists)
+}
+
+// TestNormalizeHookEvent locks the event-name canonicalization for every
+// supported event. Hook config keys may be written in canonical,
+// lowercase, snake_case, upper-snake, or mixed case; all must map to the
+// single canonical name the firing sites look up. Unknown names pass
+// through unchanged so a config written against a newer crush still loads.
+func TestNormalizeHookEvent(t *testing.T) {
+	t.Parallel()
+
+	// canonical is the expected output for each event. Each is exercised
+	// in canonical, lowercase, snake_case, and upper-snake form.
+	canonical := []string{
+		"SessionStart",
+		"UserPromptSubmit",
+		"ModelRequestStart",
+		"ModelRequestStop",
+		"PermissionRequest",
+		"PreToolUse",
+		"PostToolUse",
+		"PostToolUseFailure",
+		"AssistantMessage",
+		"Stop",
+		"SessionEnd",
+	}
+
+	// snakeForms maps each canonical name to its snake_case spelling so we
+	// can verify underscore-stripping, not just case folding.
+	snakeForms := map[string]string{
+		"SessionStart":       "session_start",
+		"UserPromptSubmit":   "user_prompt_submit",
+		"ModelRequestStart":  "model_request_start",
+		"ModelRequestStop":   "model_request_stop",
+		"PermissionRequest":  "permission_request",
+		"PreToolUse":         "pre_tool_use",
+		"PostToolUse":        "post_tool_use",
+		"PostToolUseFailure": "post_tool_use_failure",
+		"AssistantMessage":   "assistant_message",
+		"Stop":               "stop",
+		"SessionEnd":         "session_end",
+	}
+
+	for _, want := range canonical {
+		want := want
+		t.Run(want, func(t *testing.T) {
+			t.Parallel()
+			// Canonical form is idempotent.
+			require.Equal(t, want, normalizeHookEvent(want))
+			// Lowercase form folds back to canonical.
+			require.Equal(t, want, normalizeHookEvent(strings.ToLower(want)))
+			// snake_case form folds back to canonical.
+			snake := snakeForms[want]
+			require.Equal(t, want, normalizeHookEvent(snake), "snake_case %q", snake)
+			// UPPER_SNAKE form folds back to canonical.
+			require.Equal(t, want, normalizeHookEvent(strings.ToUpper(snake)), "upper_snake %q", strings.ToUpper(snake))
+		})
+	}
+
+	t.Run("unknown name passes through unchanged", func(t *testing.T) {
+		t.Parallel()
+		require.Equal(t, "NotAnEvent", normalizeHookEvent("NotAnEvent"))
+		require.Equal(t, "", normalizeHookEvent(""))
+	})
 }

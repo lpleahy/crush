@@ -85,18 +85,67 @@ func (r *Runner) Hooks() []config.HookConfig {
 	return out
 }
 
+// FireNotification builds a one-shot Runner from the given hook
+// configs and fires them as a notification-only event. No-op when
+// hookCfgs is empty. Convenience for callers outside the agent loop
+// (e.g. app startup/shutdown firing SessionStart/SessionEnd) that
+// don't hold a long-lived Runner. Errors are logged at Debug.
+func FireNotification(ctx context.Context, hookCfgs []config.HookConfig, eventName, sessionID, cwd string, opts PayloadOpts) {
+	if len(hookCfgs) == 0 {
+		return
+	}
+	if opts.ProjectDir == "" {
+		opts.ProjectDir = cwd
+	}
+	runner := NewRunner(hookCfgs, cwd, cwd)
+	if err := runner.RunNotification(ctx, eventName, sessionID, "", "", opts); err != nil {
+		slog.Debug("notification hook returned error", "event", eventName, "error", err)
+	}
+}
+
 // Run executes all matching hooks for the given event and tool, returning
 // an aggregated result.
 func (r *Runner) Run(ctx context.Context, eventName, sessionID, toolName, toolInputJSON string) (AggregateResult, error) {
+	return r.RunWithOpts(ctx, eventName, sessionID, toolName, toolInputJSON, PayloadOpts{})
+}
+
+// RunNotification fires notification-only lifecycle hooks. All
+// configured hooks for the event fire (no matcher filtering — events
+// like Stop or SessionStart have no tool name to match against, and a
+// PermissionRequest's tool name is passed through for the payload, not
+// for filtering). Returned decisions are ignored; only execution
+// errors are returned.
+//
+// toolName and toolInputJSON are usually empty but populated for
+// PermissionRequest, which carries the pending tool's name and input.
+func (r *Runner) RunNotification(ctx context.Context, eventName, sessionID, toolName, toolInputJSON string, opts PayloadOpts) error {
+	if len(r.hooks) == 0 {
+		return nil
+	}
+	cfgs := make([]config.HookConfig, 0, len(r.hooks))
+	for _, h := range r.hooks {
+		cfgs = append(cfgs, h.cfg)
+	}
+	_, err := r.runHooks(ctx, eventName, sessionID, toolName, toolInputJSON, cfgs, opts)
+	return err
+}
+
+// RunWithOpts is Run with additional event-specific context (turn_id,
+// provider, model, status, etc.) carried through the JSON payload and
+// CRUSH_* env vars. PreToolUse uses the basic Run.
+func (r *Runner) RunWithOpts(ctx context.Context, eventName, sessionID, toolName, toolInputJSON string, opts PayloadOpts) (AggregateResult, error) {
 	matching := r.matchingHooks(toolName)
 	if len(matching) == 0 {
 		return AggregateResult{Decision: DecisionNone}, nil
 	}
+	return r.runHooks(ctx, eventName, sessionID, toolName, toolInputJSON, matching, opts)
+}
 
+func (r *Runner) runHooks(ctx context.Context, eventName, sessionID, toolName, toolInputJSON string, hookCfgs []config.HookConfig, opts PayloadOpts) (AggregateResult, error) {
 	// Deduplicate by command string.
-	seen := make(map[string]bool, len(matching))
+	seen := make(map[string]bool, len(hookCfgs))
 	var deduped []config.HookConfig
-	for _, h := range matching {
+	for _, h := range hookCfgs {
 		if seen[h.Command] {
 			continue
 		}
@@ -104,8 +153,8 @@ func (r *Runner) Run(ctx context.Context, eventName, sessionID, toolName, toolIn
 		deduped = append(deduped, h)
 	}
 
-	envVars := BuildEnv(eventName, toolName, sessionID, r.cwd, r.projectDir, toolInputJSON)
-	payload := BuildPayload(eventName, sessionID, r.cwd, toolName, toolInputJSON)
+	envVars := BuildEnvOpts(eventName, toolName, sessionID, r.cwd, r.projectDir, toolInputJSON, opts)
+	payload := BuildPayloadOpts(eventName, sessionID, r.cwd, toolName, toolInputJSON, opts)
 
 	results := make([]HookResult, len(deduped))
 	var wg sync.WaitGroup

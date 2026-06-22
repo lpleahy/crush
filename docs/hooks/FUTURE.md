@@ -150,18 +150,56 @@ unaffected.
   full tree. But call it out explicitly in docs so users aren't surprised by N²
   explosions on pathological configs.
 
-## `UserPromptSubmit` event
+## `AssistantMessage` event
 
-**Status:** not implemented.
+**Status:** once-per-message variant implemented; per-token streaming variant
+not implemented.
+
+The lifecycle event set (see [README.md](./README.md#events)) covers turn and
+tool boundaries. `AssistantMessage` now fires **once per completed assistant
+message** — after the model finishes a turn, on its terminal step (a step that
+ends with tool calls is a continuation and is skipped). The payload carries the
+full assistant `text`, a best-effort `message_token_count`, and the
+`finish_reason`; the env-var copy of the text (`CRUSH_ASSISTANT_MESSAGE_TEXT`)
+is truncated to ~4KB while the JSON `message_text` stays intact. Like the other
+lifecycle events it is notification-only.
+
+### Why the once-per-message variant first
+
+Unlike the other lifecycle events, which fire at most a handful of times per
+turn, assistant text streams token-by-token. A naive `AssistantMessage` that
+fired per delta would spawn hundreds of subprocesses per turn, so per-token
+firing is intentionally untenable. Firing once on the finalized message is
+cheap and matches the "the assistant produced a message" use cases: stream a
+running transcript to an external log, update a "last activity" timestamp, drive
+a richer status display than the binary running/done.
+
+### Remaining future work: streaming `partial` variant
+
+An optional `message_kind: "partial"` behind a config flag, debounced to at most
+~1/sec, for users who explicitly want intra-turn streaming progress and accept
+the cost. The env var `CRUSH_MESSAGE_KIND` is reserved for this distinction
+(`partial`/`final`); the current once-per-message firing does not set it. Until
+a concrete use case needs intra-turn assistant text, the finalized-message
+event plus the binary running→done signal from `UserPromptSubmit`/`Stop` is
+enough.
+
+## `UserPromptSubmit` control variant (rewrite / deny)
+
+**Status:** notification variant implemented; control variant not implemented.
+
+`UserPromptSubmit` now fires as a **notification-only** event (great for status
+indicators). What's described below — the ability to **rewrite** the prompt
+(`updated_prompt`) or **deny** the submission before it reaches the LLM —
+remains future work. The notification variant ignores any decision the hook
+returns.
 
 ### Motivation
 
-Today Crush supports exactly one hook event, `PreToolUse`. That's enough to gate
-and rewrite tool calls but nothing else. The next-most-useful event is
-`UserPromptSubmit`: fires after the user hits Enter but before the turn hits the
-LLM. Lets hooks inject context, rewrite prompts, or gate on content without the
-mutation complexity of `PostToolUse` (output scrubbing, error coercion, size
-limits — all rabbit holes).
+The notification variant tells external tooling a turn started. The control
+variant would let hooks inject context, rewrite prompts, or gate on content
+without the mutation complexity of `PostToolUse` (output scrubbing, error
+coercion, size limits — all rabbit holes).
 
 ### Use cases
 

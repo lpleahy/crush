@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"charm.land/catwalk/pkg/catwalk"
 	"charm.land/fantasy"
@@ -168,6 +169,37 @@ func NewCoordinator(
 		skillTracker: skillTracker,
 	}
 
+	// Fire a PermissionRequest lifecycle hook whenever a tool call
+	// blocks for user approval. Registered unconditionally; the firing
+	// helper no-ops when no PermissionRequest hooks are configured, so
+	// config reloads that add one later take effect without re-wiring.
+	//
+	// The callback runs on the requesting goroutine, just before the
+	// permission service publishes the request to the UI, so it must not
+	// block: a slow hook would otherwise delay the prompt by up to its
+	// timeout. Dispatch the hook asynchronously on a fresh bounded
+	// context, mirroring the other notification-only sites
+	// (fireModelEvent / fireAssistantMessageEvent in agent.go). The
+	// payload is marshaled up front from the caller-owned request so the
+	// goroutine doesn't read req after the synchronous callback returns.
+	permissions.SetOnRequestBlocked(func(req permission.PermissionRequest) {
+		paramsJSON := ""
+		if data, err := json.Marshal(req.Params); err == nil {
+			paramsJSON = string(data)
+		}
+		sessionID := req.SessionID
+		toolName := req.ToolName
+		opts := hooks.PayloadOpts{
+			PermissionKind:    req.Action,
+			PermissionMessage: req.Description,
+		}
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			c.fireLifecycleEventTool(ctx, hooks.EventPermissionRequest, sessionID, toolName, paramsJSON, opts)
+		}()
+	})
+
 	agentCfg, ok := cfg.Config().Agents[config.AgentCoder]
 	if !ok {
 		return nil, errCoderAgentNotConfigured
@@ -203,10 +235,74 @@ func (c *coordinator) RunAccepted(ctx context.Context, accept *AcceptedRun, sess
 // Accepted so sessionAgent.Run can consume the accept reservation under
 // dispatchMu; when nil (the in-process/local path) no accept tracking
 // applies.
-func (c *coordinator) run(ctx context.Context, accept *AcceptedRun, sessionID string, prompt string, attachments ...message.Attachment) (*fantasy.AgentResult, error) {
+// fireLifecycleEvent runs notification-only lifecycle hooks. A fresh
+// per-event Runner is built on demand from Config().Hooks[eventName];
+// fire frequency is at most a few per turn so caching isn't worth the
+// invalidation logic. Decision and Halt return values are ignored —
+// these events can't block the turn or rewrite anything. Errors are
+// logged at Debug.
+func (c *coordinator) fireLifecycleEvent(ctx context.Context, eventName, sessionID string, opts hooks.PayloadOpts) {
+	c.fireLifecycleEventTool(ctx, eventName, sessionID, "", "", opts)
+}
+
+// fireLifecycleEventTool is fireLifecycleEvent with a tool name and
+// tool input for events that carry them (PermissionRequest).
+func (c *coordinator) fireLifecycleEventTool(ctx context.Context, eventName, sessionID, toolName, toolInputJSON string, opts hooks.PayloadOpts) {
+	hookCfgs := c.cfg.Config().Hooks[eventName]
+	if len(hookCfgs) == 0 {
+		return
+	}
+	cwd := c.cfg.WorkingDir()
+	if opts.ProjectDir == "" {
+		opts.ProjectDir = cwd
+	}
+	runner := hooks.NewRunner(hookCfgs, cwd, cwd)
+	if err := runner.RunNotification(ctx, eventName, sessionID, toolName, toolInputJSON, opts); err != nil {
+		slog.Debug("lifecycle hook returned error", "event", eventName, "error", err)
+	}
+}
+
+func (c *coordinator) run(ctx context.Context, accept *AcceptedRun, sessionID string, prompt string, attachments ...message.Attachment) (result *fantasy.AgentResult, originalErr error) {
 	if err := c.readyWg.Wait(); err != nil {
 		return nil, err
 	}
+
+	runID := RunIDFromContext(ctx)
+
+	// Arrange Stop to fire on every exit path — including the
+	// validation errors below — so external indicators that flipped to
+	// "running" on UserPromptSubmit always see a terminal transition.
+	// Stop uses a fresh background context so it fires even when the
+	// run ctx was cancelled (which is how "interrupted"/"cancelled"
+	// statuses get reported).
+	defer func() {
+		status := "success"
+		var errMsg string
+		if originalErr != nil {
+			switch {
+			case errors.Is(originalErr, context.Canceled):
+				status = "cancelled"
+			case errors.Is(originalErr, context.DeadlineExceeded):
+				status = "interrupted"
+			default:
+				status = "error"
+				errMsg = originalErr.Error()
+			}
+		}
+		stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		c.fireLifecycleEvent(stopCtx, hooks.EventStop, sessionID, hooks.PayloadOpts{
+			TurnID:     runID,
+			ProjectDir: c.cfg.WorkingDir(),
+			Status:     status,
+			Error:      errMsg,
+		})
+	}()
+
+	c.fireLifecycleEvent(ctx, hooks.EventUserPromptSubmit, sessionID, hooks.PayloadOpts{
+		TurnID:     runID,
+		ProjectDir: c.cfg.WorkingDir(),
+	})
 
 	// refresh models before each run
 	if err := c.UpdateModels(ctx); err != nil {
@@ -260,13 +356,9 @@ func (c *coordinator) run(ctx context.Context, accept *AcceptedRun, sessionID st
 		latest = rc
 		hasLatest = true
 	}
-	// Propagate the caller-supplied RunID (set via agent.WithRunID
-	// at the HTTP boundary in backend.SendMessage) onto the
-	// SessionAgentCall so the terminal RunComplete event echoes it
-	// back. Both attempts in the retry chain reuse the same RunID;
-	// the coalesce closure publishes the final outcome under that
-	// same correlator.
-	runID := RunIDFromContext(ctx)
+	// runID is extracted at function entry above. Both attempts in the
+	// retry chain reuse it; the coalesce closure publishes the final
+	// outcome under that same correlator.
 	run := func() (*fantasy.AgentResult, error) {
 		return c.currentAgent.Run(ctx, SessionAgentCall{
 			SessionID:        sessionID,
@@ -285,8 +377,7 @@ func (c *coordinator) run(ctx context.Context, accept *AcceptedRun, sessionID st
 		})
 	}
 	beforeLoaded := c.skillTracker.LoadedNames()
-	var result *fantasy.AgentResult
-	originalErr := c.runWithUnauthorizedRetry(ctx, providerCfg, func() error {
+	originalErr = c.runWithUnauthorizedRetry(ctx, providerCfg, func() error {
 		var err error
 		result, err = run()
 		return err
@@ -553,6 +644,15 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 	}
 
 	largeProviderCfg, _ := c.cfg.Config().Providers.Get(large.ModelCfg.Provider)
+	// Only the top-level agent fires model-request lifecycle hooks;
+	// sub-agents would otherwise fire the user's hooks once per
+	// delegated model call.
+	var onLifecycle func(context.Context, string, string, hooks.PayloadOpts)
+	if !isSubAgent {
+		onLifecycle = func(ctx context.Context, eventName, sessionID string, opts hooks.PayloadOpts) {
+			c.fireLifecycleEvent(ctx, eventName, sessionID, opts)
+		}
+	}
 	result := NewSessionAgent(SessionAgentOptions{
 		LargeModel:           large,
 		SmallModel:           small,
@@ -566,6 +666,7 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 		Tools:                nil,
 		Notify:               c.notify,
 		RunComplete:          c.runComplete,
+		OnLifecycleEvent:     onLifecycle,
 	})
 
 	c.readyWg.Go(func() error {
@@ -621,6 +722,27 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 	var hookRunner *hooks.Runner
 	if preToolHooks := c.cfg.Config().Hooks[hooks.EventPreToolUse]; len(preToolHooks) > 0 {
 		hookRunner = hooks.NewRunner(preToolHooks, c.cfg.WorkingDir(), c.cfg.WorkingDir())
+	}
+
+	// Build the PostToolUse / PostToolUseFailure firing callback if
+	// either is configured. We construct per-event runners on demand
+	// inside the closure to keep both events' matcher state isolated.
+	var postFire postHookFire
+	if len(c.cfg.Config().Hooks[hooks.EventPostToolUse]) > 0 ||
+		len(c.cfg.Config().Hooks[hooks.EventPostToolUseFailure]) > 0 {
+		cwd := c.cfg.WorkingDir()
+		postFire = func(ctx context.Context, eventName, toolName, toolInput string, opts hooks.PayloadOpts) {
+			cfgs := c.cfg.Config().Hooks[eventName]
+			if len(cfgs) == 0 {
+				return
+			}
+			runner := hooks.NewRunner(cfgs, cwd, cwd)
+			sessionID := tools.GetSessionFromContext(ctx)
+			if _, err := runner.RunWithOpts(ctx, eventName, sessionID, toolName, toolInput, opts); err != nil {
+				slog.Debug("post-tool hook returned error",
+					"event", eventName, "tool", toolName, "error", err)
+			}
+		}
 	}
 
 	allTools = append(
@@ -695,7 +817,7 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 	// without hook interception to avoid firing the user's hook N times
 	// per delegated turn. The top-level invocation of the sub-agent tool
 	// itself is still wrapped from the coder's side.
-	filteredTools = wrapToolsWithHooks(filteredTools, hookRunner, isSubAgent)
+	filteredTools = wrapToolsWithHooks(filteredTools, hookRunner, postFire, isSubAgent)
 
 	return filteredTools, nil
 }
