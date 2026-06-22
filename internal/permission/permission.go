@@ -82,6 +82,14 @@ type Service interface {
 	SetSkipRequests(skip bool)
 	SkipRequests() bool
 	SubscribeNotifications(ctx context.Context) <-chan pubsub.Event[PermissionNotification]
+	// SetOnRequestBlocked registers a callback that fires exactly when a
+	// permission request is about to block waiting for the user — i.e.
+	// after all auto-approve, allowlist, and hook-approval shortcuts
+	// have been exhausted. Used by the agent layer to fire a
+	// PermissionRequest lifecycle hook ("needs-input"). The callback
+	// runs synchronously on the requesting goroutine, so it should be
+	// cheap or dispatch its own work. Pass nil to clear.
+	SetOnRequestBlocked(fn func(PermissionRequest))
 }
 
 // PermissionKey is a composite key for session permission lookups.
@@ -108,6 +116,18 @@ type permissionService struct {
 	requestMu       sync.Mutex
 	activeRequest   *PermissionRequest
 	activeRequestMu sync.Mutex
+
+	// onRequestBlocked, if set, fires when a request is about to block
+	// for the user. Stored via atomic so registration races clean.
+	onRequestBlocked atomic.Pointer[func(PermissionRequest)]
+}
+
+func (s *permissionService) SetOnRequestBlocked(fn func(PermissionRequest)) {
+	if fn == nil {
+		s.onRequestBlocked.Store(nil)
+		return
+	}
+	s.onRequestBlocked.Store(&fn)
 }
 
 // resolve atomically removes the pending request entry for the given
@@ -265,6 +285,14 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 	respCh := make(chan bool, 1)
 	s.pendingRequests.Set(permission.ID, respCh)
 	defer s.pendingRequests.Del(permission.ID)
+
+	// This is the genuine "blocked, waiting for the user" moment — all
+	// auto-approve / allowlist / hook-approval shortcuts above have been
+	// exhausted. Fire the blocked callback so the agent layer can emit a
+	// PermissionRequest lifecycle hook.
+	if cb := s.onRequestBlocked.Load(); cb != nil {
+		(*cb)(permission)
+	}
 
 	// Publish the request
 	s.Publish(pubsub.CreatedEvent, permission)

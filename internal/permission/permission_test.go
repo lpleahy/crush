@@ -190,6 +190,161 @@ func TestPermissionService_HookApproval(t *testing.T) {
 	})
 }
 
+func TestPermissionService_OnRequestBlocked(t *testing.T) {
+	t.Parallel()
+
+	t.Run("fires when a request blocks for the user", func(t *testing.T) {
+		t.Parallel()
+		service := NewPermissionService("/tmp", false, nil)
+
+		blocked := make(chan PermissionRequest, 1)
+		service.SetOnRequestBlocked(func(req PermissionRequest) {
+			blocked <- req
+		})
+
+		events := service.Subscribe(t.Context())
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			_, _ = service.Request(t.Context(), CreatePermissionRequest{
+				SessionID:   "s1",
+				ToolCallID:  "call-1",
+				ToolName:    "bash",
+				Action:      "execute",
+				Description: "needs approval",
+				Path:        "/tmp",
+			})
+		})
+
+		// The callback must fire before the request resolves.
+		select {
+		case req := <-blocked:
+			assert.Equal(t, "bash", req.ToolName)
+			assert.Equal(t, "execute", req.Action)
+		case <-time.After(2 * time.Second):
+			t.Fatal("onRequestBlocked did not fire")
+		}
+
+		event := <-events
+		service.Deny(event.Payload)
+		wg.Wait()
+	})
+
+	t.Run("does not fire when skip mode is on", func(t *testing.T) {
+		t.Parallel()
+		service := NewPermissionService("/tmp", true, nil)
+
+		fired := false
+		service.SetOnRequestBlocked(func(PermissionRequest) { fired = true })
+
+		granted, err := service.Request(t.Context(), CreatePermissionRequest{
+			SessionID:  "s1",
+			ToolCallID: "call-1",
+			ToolName:   "bash",
+			Action:     "execute",
+			Path:       "/tmp",
+		})
+		require.NoError(t, err)
+		assert.True(t, granted)
+		assert.False(t, fired, "skip mode should not block, so callback must not fire")
+	})
+
+	t.Run("does not fire when allowlisted", func(t *testing.T) {
+		t.Parallel()
+		service := NewPermissionService("/tmp", false, []string{"bash"})
+
+		fired := false
+		service.SetOnRequestBlocked(func(PermissionRequest) { fired = true })
+
+		granted, err := service.Request(t.Context(), CreatePermissionRequest{
+			SessionID:  "s1",
+			ToolCallID: "call-1",
+			ToolName:   "bash",
+			Action:     "execute",
+			Path:       "/tmp",
+		})
+		require.NoError(t, err)
+		assert.True(t, granted)
+		assert.False(t, fired, "allowlisted tool should not block, so callback must not fire")
+	})
+
+	t.Run("does not fire when a PreToolUse hook pre-approved the call", func(t *testing.T) {
+		t.Parallel()
+		service := NewPermissionService("/tmp", false, nil)
+
+		fired := false
+		service.SetOnRequestBlocked(func(PermissionRequest) { fired = true })
+
+		ctx := WithHookApproval(t.Context(), "call-1")
+		granted, err := service.Request(ctx, CreatePermissionRequest{
+			SessionID:  "s1",
+			ToolCallID: "call-1",
+			ToolName:   "bash",
+			Action:     "execute",
+			Path:       "/tmp",
+		})
+		require.NoError(t, err)
+		assert.True(t, granted)
+		assert.False(t, fired, "a hook pre-approval bypasses the prompt, so the block callback must not fire")
+	})
+
+	t.Run("does not fire when auto-approve session is on", func(t *testing.T) {
+		t.Parallel()
+		service := NewPermissionService("/tmp", false, nil)
+
+		fired := false
+		service.SetOnRequestBlocked(func(PermissionRequest) { fired = true })
+		service.AutoApproveSession("s1")
+
+		granted, err := service.Request(t.Context(), CreatePermissionRequest{
+			SessionID:  "s1",
+			ToolCallID: "call-1",
+			ToolName:   "bash",
+			Action:     "execute",
+			Path:       "/tmp",
+		})
+		require.NoError(t, err)
+		assert.True(t, granted)
+		assert.False(t, fired, "auto-approved session should not block, so callback must not fire")
+	})
+
+	t.Run("does not fire when a persistent session grant already exists", func(t *testing.T) {
+		t.Parallel()
+		service := NewPermissionService("/tmp", false, nil)
+
+		// First request: grant persistently so the session-permission
+		// shortcut applies to the second identical request.
+		events := service.Subscribe(t.Context())
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			_, _ = service.Request(t.Context(), CreatePermissionRequest{
+				SessionID:  "s1",
+				ToolCallID: "call-1",
+				ToolName:   "bash",
+				Action:     "execute",
+				Path:       "/tmp",
+			})
+		})
+		first := <-events
+		service.GrantPersistent(first.Payload)
+		wg.Wait()
+
+		// Now arm the callback and fire an identical request — it should
+		// hit the persistent-grant shortcut and never block.
+		fired := false
+		service.SetOnRequestBlocked(func(PermissionRequest) { fired = true })
+		granted, err := service.Request(t.Context(), CreatePermissionRequest{
+			SessionID:  "s1",
+			ToolCallID: "call-2",
+			ToolName:   "bash",
+			Action:     "execute",
+			Path:       "/tmp",
+		})
+		require.NoError(t, err)
+		assert.True(t, granted)
+		assert.False(t, fired, "a persistent session grant should bypass the prompt, so the callback must not fire")
+	})
+}
+
 func TestPermissionService_SequentialProperties(t *testing.T) {
 	t.Run("Sequential permission requests with persistent grants", func(t *testing.T) {
 		service := NewPermissionService("/tmp", false, []string{})

@@ -2,11 +2,15 @@ package hooks
 
 import (
 	"context"
+	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/shell"
@@ -220,6 +224,184 @@ func TestBuildPayload(t *testing.T) {
 	require.Contains(t, s, `"tool_name":"bash"`)
 	// tool_input should be an object, not a string.
 	require.Contains(t, s, `"tool_input":{"command":"ls"}`)
+}
+
+func TestBuildPayloadOpts_LifecycleFields(t *testing.T) {
+	t.Parallel()
+	payload := BuildPayloadOpts(EventStop, "sess-1", "/work", "", "", PayloadOpts{
+		TurnID:     "turn-9",
+		ProjectDir: "/project",
+		Provider:   "chatgpt",
+		Model:      "gpt-5.5",
+		Status:     "cancelled",
+		Error:      "boom",
+	})
+	s := string(payload)
+	require.Contains(t, s, `"event":"Stop"`)
+	require.Contains(t, s, `"turn_id":"turn-9"`)
+	require.Contains(t, s, `"provider":"chatgpt"`)
+	require.Contains(t, s, `"model":"gpt-5.5"`)
+	require.Contains(t, s, `"status":"cancelled"`)
+	require.Contains(t, s, `"error":"boom"`)
+	// A notification event without a tool must omit tool_name/tool_input.
+	require.NotContains(t, s, `"tool_name"`)
+	require.NotContains(t, s, `"tool_input"`)
+}
+
+func TestBuildEnvOpts_LifecycleVars(t *testing.T) {
+	t.Parallel()
+	env := BuildEnvOpts(EventModelRequestStart, "", "sess-1", "/work", "/project", "", PayloadOpts{
+		TurnID:   "turn-9",
+		Provider: "chatgpt",
+		Model:    "gpt-5.5",
+		Status:   "success",
+	})
+	envMap := make(map[string]string)
+	for _, e := range env {
+		parts := splitFirst(e, "=")
+		if len(parts) == 2 {
+			envMap[parts[0]] = parts[1]
+		}
+	}
+	require.Equal(t, "ModelRequestStart", envMap["CRUSH_EVENT"])
+	require.Equal(t, "turn-9", envMap["CRUSH_TURN_ID"])
+	require.Equal(t, "chatgpt", envMap["CRUSH_PROVIDER"])
+	require.Equal(t, "gpt-5.5", envMap["CRUSH_MODEL"])
+	require.Equal(t, "success", envMap["CRUSH_STATUS"])
+	// No tool for this event — CRUSH_TOOL_NAME must be absent.
+	_, hasTool := envMap["CRUSH_TOOL_NAME"]
+	require.False(t, hasTool, "CRUSH_TOOL_NAME should be omitted for non-tool events")
+}
+
+// TestIsNotificationEvent_AssistantMessage asserts the AssistantMessage
+// event is notification-only (fire-and-forget): its decision/halt return
+// values must be ignored so a hook on assistant output can never block or
+// rewrite the turn.
+func TestIsNotificationEvent_AssistantMessage(t *testing.T) {
+	t.Parallel()
+	require.True(t, IsNotificationEvent(EventAssistantMessage))
+}
+
+func TestBuildEnvOpts_AssistantMessageVars(t *testing.T) {
+	t.Parallel()
+	env := BuildEnvOpts(EventAssistantMessage, "", "sess-1", "/work", "/project", "", PayloadOpts{
+		Provider:          "chatgpt",
+		Model:             "gpt-5.5",
+		MessageText:       "hello world",
+		MessageTokenCount: 42,
+		FinishReason:      "end_turn",
+	})
+	envMap := make(map[string]string)
+	for _, e := range env {
+		parts := splitFirst(e, "=")
+		if len(parts) == 2 {
+			envMap[parts[0]] = parts[1]
+		}
+	}
+	require.Equal(t, "AssistantMessage", envMap["CRUSH_EVENT"])
+	require.Equal(t, "chatgpt", envMap["CRUSH_PROVIDER"])
+	require.Equal(t, "gpt-5.5", envMap["CRUSH_MODEL"])
+	require.Equal(t, "hello world", envMap["CRUSH_ASSISTANT_MESSAGE_TEXT"])
+	require.Equal(t, "end_turn", envMap["CRUSH_ASSISTANT_MESSAGE_FINISH_REASON"])
+	require.Equal(t, "42", envMap["CRUSH_ASSISTANT_MESSAGE_TOKEN_COUNT"])
+	// No tool for this event — CRUSH_TOOL_NAME must be absent.
+	_, hasTool := envMap["CRUSH_TOOL_NAME"]
+	require.False(t, hasTool, "CRUSH_TOOL_NAME should be omitted for AssistantMessage")
+}
+
+// TestBuildEnvOpts_AssistantMessageTextTruncated asserts the env var copy
+// of the assistant text is clamped to ~4KB while the JSON payload keeps
+// the full text. A long assistant turn must not blow past OS env limits.
+func TestBuildEnvOpts_AssistantMessageTextTruncated(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("a", 10*1024) // 10KB, well over the 4KB cap.
+	env := BuildEnvOpts(EventAssistantMessage, "", "sess-1", "/work", "/project", "", PayloadOpts{
+		MessageText: long,
+	})
+	var got string
+	var found bool
+	for _, e := range env {
+		if parts := splitFirst(e, "="); len(parts) == 2 && parts[0] == "CRUSH_ASSISTANT_MESSAGE_TEXT" {
+			got = parts[1]
+			found = true
+		}
+	}
+	require.True(t, found, "CRUSH_ASSISTANT_MESSAGE_TEXT should be present")
+	// Truncated: shorter than the input and within the cap plus the
+	// multi-byte ellipsis marker.
+	require.Less(t, len(got), len(long))
+	require.LessOrEqual(t, len(got), maxEnvTextBytes+len("…"))
+	require.True(t, strings.HasSuffix(got, "…"), "truncated text should end with an ellipsis")
+
+	// The full text survives untruncated in the JSON payload.
+	payload := BuildPayloadOpts(EventAssistantMessage, "sess-1", "/work", "", "", PayloadOpts{
+		MessageText: long,
+	})
+	require.Contains(t, string(payload), long)
+}
+
+// TestBuildEnvOpts_AssistantMessageVarsOmittedWhenEmpty asserts the
+// AssistantMessage env vars follow the existing omit-when-empty
+// convention so events that don't carry them stay clean.
+func TestBuildEnvOpts_AssistantMessageVarsOmittedWhenEmpty(t *testing.T) {
+	t.Parallel()
+	env := BuildEnvOpts(EventStop, "", "sess-1", "/work", "/project", "", PayloadOpts{
+		Status: "success",
+	})
+	for _, e := range env {
+		require.NotContains(t, e, "CRUSH_ASSISTANT_MESSAGE_")
+	}
+}
+
+func TestBuildPayloadOpts_AssistantMessageFields(t *testing.T) {
+	t.Parallel()
+	payload := BuildPayloadOpts(EventAssistantMessage, "sess-1", "/work", "", "", PayloadOpts{
+		Provider:          "chatgpt",
+		Model:             "gpt-5.5",
+		MessageText:       "the full assistant reply",
+		MessageTokenCount: 7,
+		FinishReason:      "end_turn",
+	})
+	s := string(payload)
+	require.Contains(t, s, `"event":"AssistantMessage"`)
+	require.Contains(t, s, `"message_text":"the full assistant reply"`)
+	require.Contains(t, s, `"message_token_count":7`)
+	require.Contains(t, s, `"finish_reason":"end_turn"`)
+	// A notification event without a tool must omit tool_name/tool_input.
+	require.NotContains(t, s, `"tool_name"`)
+	require.NotContains(t, s, `"tool_input"`)
+}
+
+// TestFireNotification_EndToEnd drives a real hook script through the
+// package-level helper the app layer uses for SessionStart/SessionEnd,
+// asserting the script sees the payload on stdin and the env vars.
+func TestFireNotification_EndToEnd(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	out := filepath.Join(dir, "captured.txt")
+	// Capture both the stdin JSON and a couple of env vars.
+	cmd := `cat > "` + out + `"; printf "\nEVENT=%s STATUS=%s\n" "$CRUSH_EVENT" "$CRUSH_STATUS" >> "` + out + `"`
+
+	cfgs := []config.HookConfig{{Command: cmd}}
+	FireNotification(context.Background(), cfgs, EventStop, "sess-1", dir, PayloadOpts{
+		TurnID: "turn-1",
+		Status: "success",
+	})
+
+	data, err := os.ReadFile(out)
+	require.NoError(t, err)
+	got := string(data)
+	require.Contains(t, got, `"event":"Stop"`)
+	require.Contains(t, got, `"turn_id":"turn-1"`)
+	require.Contains(t, got, `"status":"success"`)
+	require.Contains(t, got, "EVENT=Stop STATUS=success")
+}
+
+func TestFireNotification_NoHooksIsNoop(t *testing.T) {
+	t.Parallel()
+	// Must not panic or error with an empty config.
+	FireNotification(context.Background(), nil, EventStop, "s", t.TempDir(), PayloadOpts{})
 }
 
 func TestRunnerExitCode0Allow(t *testing.T) {
@@ -753,5 +935,271 @@ func TestParseStdoutClaudeCodeFormat(t *testing.T) {
 		r := parseStdout(`{"decision":"allow","context":"hello"}`)
 		require.Equal(t, DecisionAllow, r.Decision)
 		require.Equal(t, "hello", r.Context)
+	})
+}
+
+// envToMap parses a CRUSH-style env slice ("KEY=value") into a map,
+// splitting on the first '=' so values may themselves contain '='.
+func envToMap(env []string) map[string]string {
+	m := make(map[string]string, len(env))
+	for _, e := range env {
+		if k, v, ok := strings.Cut(e, "="); ok {
+			m[k] = v
+		}
+	}
+	return m
+}
+
+// TestIsNotificationEvent_AllEvents is the decision that governs which
+// events can block/halt/rewrite a turn. Every event except PreToolUse is
+// notification-only (its decision/halt is ignored); PreToolUse is the
+// sole event whose decision is acted on. A regression here would either
+// let a notification hook block the turn or silently disarm PreToolUse.
+func TestIsNotificationEvent_AllEvents(t *testing.T) {
+	t.Parallel()
+
+	notification := []string{
+		EventSessionStart,
+		EventUserPromptSubmit,
+		EventModelRequestStart,
+		EventModelRequestStop,
+		EventPermissionRequest,
+		EventPostToolUse,
+		EventPostToolUseFailure,
+		EventAssistantMessage,
+		EventStop,
+		EventSessionEnd,
+	}
+	for _, ev := range notification {
+		require.Truef(t, IsNotificationEvent(ev),
+			"%s must be notification-only (decision/halt ignored)", ev)
+	}
+
+	// PreToolUse is the only event whose decision can block/halt/rewrite.
+	require.False(t, IsNotificationEvent(EventPreToolUse),
+		"PreToolUse must NOT be notification-only — its decision is acted on")
+
+	// An unknown event name is not in the notification set; callers treat
+	// it as non-firing rather than as a blocking event.
+	require.False(t, IsNotificationEvent("NotARealEvent"))
+
+	// The notification set must be exactly the ten non-PreToolUse events.
+	require.Len(t, notificationEvents, len(notification),
+		"notificationEvents drifted from the enumerated set")
+}
+
+// TestBuildPayloadOpts_PostToolUseFields covers the PostToolUse payload:
+// the outcome rides status/error, tool_output is carried, and the
+// duration surfaces. PostToolUse fires with a tool name/input, unlike the
+// tool-less notification events.
+func TestBuildPayloadOpts_PostToolUseFields(t *testing.T) {
+	t.Parallel()
+	payload := BuildPayloadOpts(EventPostToolUse, "sess-1", "/work", "bash", `{"command":"ls"}`, PayloadOpts{
+		Status:     "success",
+		ToolOutput: "file listing",
+		DurationMs: 1234,
+	})
+	s := string(payload)
+	require.Contains(t, s, `"event":"PostToolUse"`)
+	require.Contains(t, s, `"tool_name":"bash"`)
+	require.Contains(t, s, `"tool_input":{"command":"ls"}`)
+	require.Contains(t, s, `"status":"success"`)
+	require.Contains(t, s, `"tool_output":"file listing"`)
+	require.Contains(t, s, `"duration_ms":1234`)
+	// No error on a success outcome.
+	require.NotContains(t, s, `"error"`)
+}
+
+// TestBuildPayloadOpts_PostToolUseFailureFields asserts the failure
+// outcome carries the error and omits tool_output (only successes set it).
+func TestBuildPayloadOpts_PostToolUseFailureFields(t *testing.T) {
+	t.Parallel()
+	payload := BuildPayloadOpts(EventPostToolUseFailure, "sess-1", "/work", "bash", `{"command":"ls"}`, PayloadOpts{
+		Status: "error",
+		Error:  "exit status 1",
+	})
+	s := string(payload)
+	require.Contains(t, s, `"event":"PostToolUseFailure"`)
+	require.Contains(t, s, `"status":"error"`)
+	require.Contains(t, s, `"error":"exit status 1"`)
+	// A failure carries no tool output.
+	require.NotContains(t, s, `"tool_output"`)
+}
+
+// TestBuildPayloadOpts_PermissionRequestFields covers the
+// PermissionRequest payload, which carries the pending tool's name/input
+// plus the permission kind and message.
+func TestBuildPayloadOpts_PermissionRequestFields(t *testing.T) {
+	t.Parallel()
+	payload := BuildPayloadOpts(EventPermissionRequest, "sess-1", "/work", "bash", `{"command":"rm -rf /"}`, PayloadOpts{
+		PermissionKind:    "execute",
+		PermissionMessage: "needs approval",
+	})
+	s := string(payload)
+	require.Contains(t, s, `"event":"PermissionRequest"`)
+	require.Contains(t, s, `"tool_name":"bash"`)
+	require.Contains(t, s, `"permission_kind":"execute"`)
+	require.Contains(t, s, `"permission_message":"needs approval"`)
+}
+
+// TestBuildPayloadOpts_SessionEndReason covers the SessionEnd payload,
+// whose distinguishing field is the reason (e.g. "exit").
+func TestBuildPayloadOpts_SessionEndReason(t *testing.T) {
+	t.Parallel()
+	payload := BuildPayloadOpts(EventSessionEnd, "sess-1", "/work", "", "", PayloadOpts{
+		Reason: "exit",
+	})
+	s := string(payload)
+	require.Contains(t, s, `"event":"SessionEnd"`)
+	require.Contains(t, s, `"reason":"exit"`)
+	require.NotContains(t, s, `"tool_name"`)
+}
+
+// TestBuildPayloadOpts_OmitsEmptyOptionalFields locks down the
+// omit-when-empty JSON convention: a bare notification event with no
+// optional fields must emit only the always-present keys.
+func TestBuildPayloadOpts_OmitsEmptyOptionalFields(t *testing.T) {
+	t.Parallel()
+	payload := BuildPayloadOpts(EventSessionStart, "sess-1", "/work", "", "", PayloadOpts{})
+	s := string(payload)
+	// Always present.
+	require.Contains(t, s, `"event":"SessionStart"`)
+	require.Contains(t, s, `"session_id":"sess-1"`)
+	require.Contains(t, s, `"cwd":"/work"`)
+	// Every optional field must be omitted.
+	for _, key := range []string{
+		"turn_id", "project_dir", "tool_name", "tool_input", "tool_output",
+		"duration_ms", "provider", "model", "permission_kind",
+		"permission_message", "message_kind", "status", "error", "reason",
+		"message_text", "message_token_count", "finish_reason",
+	} {
+		require.NotContainsf(t, s, `"`+key+`"`, "optional field %q should be omitted when empty", key)
+	}
+}
+
+// TestBuildPayloadOpts_InvalidToolInputFallsBackToEmptyObject asserts
+// that a syntactically invalid tool_input is replaced with {} rather than
+// corrupting the payload — the hook still receives valid JSON.
+func TestBuildPayloadOpts_InvalidToolInputFallsBackToEmptyObject(t *testing.T) {
+	t.Parallel()
+	payload := BuildPayloadOpts(EventPreToolUse, "sess-1", "/work", "bash", `{not valid json`, PayloadOpts{})
+	s := string(payload)
+	require.Contains(t, s, `"tool_input":{}`)
+	require.True(t, json.Valid(payload), "payload must remain valid JSON")
+}
+
+// TestBuildEnvOpts_PermissionAndMessageKindVars covers the two
+// permission-related env vars and message_kind, which the lifecycle-var
+// test above did not exercise.
+func TestBuildEnvOpts_PermissionAndMessageKindVars(t *testing.T) {
+	t.Parallel()
+	env := BuildEnvOpts(EventPermissionRequest, "bash", "sess-1", "/work", "/project", "", PayloadOpts{
+		PermissionKind:    "execute",
+		PermissionMessage: "needs approval",
+		MessageKind:       "tool_call",
+	})
+	m := envToMap(env)
+	require.Equal(t, "execute", m["CRUSH_PERMISSION_KIND"])
+	require.Equal(t, "needs approval", m["CRUSH_PERMISSION_MESSAGE"])
+	require.Equal(t, "tool_call", m["CRUSH_MESSAGE_KIND"])
+}
+
+// TestBuildEnvOpts_NoEnvVarForErrorReasonOutputDuration documents the
+// deliberate asymmetry between the JSON payload and the env block: error,
+// reason, tool_output and duration ride the JSON payload only — there is
+// no CRUSH_ERROR / CRUSH_REASON / CRUSH_TOOL_OUTPUT / CRUSH_DURATION_MS
+// env var. A hook reads these from stdin, not the environment.
+func TestBuildEnvOpts_NoEnvVarForErrorReasonOutputDuration(t *testing.T) {
+	t.Parallel()
+	env := BuildEnvOpts(EventPostToolUseFailure, "bash", "sess-1", "/work", "/project", "", PayloadOpts{
+		Status:     "error",
+		Error:      "boom",
+		Reason:     "blocked by hook",
+		ToolOutput: "partial output",
+		DurationMs: 99,
+	})
+	m := envToMap(env)
+	// Status does get an env var.
+	require.Equal(t, "error", m["CRUSH_STATUS"])
+	// These deliberately do not.
+	for _, key := range []string{
+		"CRUSH_ERROR", "CRUSH_REASON", "CRUSH_TOOL_OUTPUT", "CRUSH_DURATION_MS", "CRUSH_DURATION",
+	} {
+		_, present := m[key]
+		require.Falsef(t, present, "%s should not be exported to the env (payload-only field)", key)
+	}
+}
+
+// TestBuildEnvOpts_ToolInputCommandAndFilePathOnlyWhenPresent asserts the
+// tool-input-derived env vars are extracted only when the corresponding
+// JSON key exists, and are omitted otherwise.
+func TestBuildEnvOpts_ToolInputCommandAndFilePathOnlyWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	t.Run("command only", func(t *testing.T) {
+		t.Parallel()
+		env := BuildEnvOpts(EventPreToolUse, "bash", "s", "/w", "/p", `{"command":"ls -la"}`, PayloadOpts{})
+		m := envToMap(env)
+		require.Equal(t, "ls -la", m["CRUSH_TOOL_INPUT_COMMAND"])
+		_, hasFP := m["CRUSH_TOOL_INPUT_FILE_PATH"]
+		require.False(t, hasFP)
+	})
+
+	t.Run("file_path only", func(t *testing.T) {
+		t.Parallel()
+		env := BuildEnvOpts(EventPreToolUse, "edit", "s", "/w", "/p", `{"file_path":"/tmp/x.go"}`, PayloadOpts{})
+		m := envToMap(env)
+		require.Equal(t, "/tmp/x.go", m["CRUSH_TOOL_INPUT_FILE_PATH"])
+		_, hasCmd := m["CRUSH_TOOL_INPUT_COMMAND"]
+		require.False(t, hasCmd)
+	})
+
+	t.Run("neither when tool input has no recognized keys", func(t *testing.T) {
+		t.Parallel()
+		env := BuildEnvOpts(EventPreToolUse, "view", "s", "/w", "/p", `{"offset":10}`, PayloadOpts{})
+		m := envToMap(env)
+		_, hasCmd := m["CRUSH_TOOL_INPUT_COMMAND"]
+		_, hasFP := m["CRUSH_TOOL_INPUT_FILE_PATH"]
+		require.False(t, hasCmd)
+		require.False(t, hasFP)
+	})
+}
+
+// TestTruncateEnvText covers the rune-boundary truncation directly,
+// including the exact-boundary no-op and the multi-byte-safe cut that the
+// 4KB-of-'a' end-to-end test cannot reach (it never lands mid-rune).
+func TestTruncateEnvText(t *testing.T) {
+	t.Parallel()
+
+	t.Run("under the cap is returned unchanged", func(t *testing.T) {
+		t.Parallel()
+		s := strings.Repeat("a", maxEnvTextBytes-1)
+		require.Equal(t, s, truncateEnvText(s))
+	})
+
+	t.Run("exactly at the cap is returned unchanged", func(t *testing.T) {
+		t.Parallel()
+		s := strings.Repeat("a", maxEnvTextBytes)
+		require.Equal(t, s, truncateEnvText(s))
+	})
+
+	t.Run("over the cap is truncated with an ellipsis", func(t *testing.T) {
+		t.Parallel()
+		s := strings.Repeat("a", maxEnvTextBytes+10)
+		got := truncateEnvText(s)
+		require.True(t, strings.HasSuffix(got, "…"))
+		require.LessOrEqual(t, len(got), maxEnvTextBytes+len("…"))
+	})
+
+	t.Run("never splits a multi-byte rune at the cut point", func(t *testing.T) {
+		t.Parallel()
+		// '世' is 3 bytes. Pad with single-byte runes so the cut lands
+		// inside a multi-byte rune, forcing the boundary walk-back.
+		s := strings.Repeat("a", maxEnvTextBytes-1) + strings.Repeat("世", 10)
+		got := truncateEnvText(s)
+		// Trim the trailing ellipsis; the remainder must be valid UTF-8
+		// with no partial trailing rune.
+		body := strings.TrimSuffix(got, "…")
+		require.True(t, utf8.ValidString(body), "truncated body must not contain a partial rune")
 	})
 }

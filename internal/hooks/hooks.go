@@ -10,10 +10,44 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// Hook event name constants.
+// Hook event name constants. PreToolUse is the only event whose
+// decision can block/halt/rewrite — all other events are
+// notification-only (return values are logged but ignored).
 const (
-	EventPreToolUse = "PreToolUse"
+	EventSessionStart       = "SessionStart"
+	EventUserPromptSubmit   = "UserPromptSubmit"
+	EventModelRequestStart  = "ModelRequestStart"
+	EventModelRequestStop   = "ModelRequestStop"
+	EventPermissionRequest  = "PermissionRequest"
+	EventPreToolUse         = "PreToolUse"
+	EventPostToolUse        = "PostToolUse"
+	EventPostToolUseFailure = "PostToolUseFailure"
+	EventAssistantMessage   = "AssistantMessage"
+	EventStop               = "Stop"
+	EventSessionEnd         = "SessionEnd"
 )
+
+// notificationEvents enumerates events whose Decision and Halt return
+// values are ignored — the hook fires for side effects only and cannot
+// block the turn or rewrite tool input.
+var notificationEvents = map[string]bool{
+	EventSessionStart:       true,
+	EventUserPromptSubmit:   true,
+	EventModelRequestStart:  true,
+	EventModelRequestStop:   true,
+	EventPermissionRequest:  true,
+	EventPostToolUse:        true,
+	EventPostToolUseFailure: true,
+	EventAssistantMessage:   true,
+	EventStop:               true,
+	EventSessionEnd:         true,
+}
+
+// IsNotificationEvent reports whether the event name is notification-
+// only. Callers should not act on decision/halt for these events.
+func IsNotificationEvent(eventName string) bool {
+	return notificationEvents[eventName]
+}
 
 // HaltExitCode is the exit code that halts the whole turn. 2 blocks the
 // current tool call; 49 sits in the no-man's-land between the

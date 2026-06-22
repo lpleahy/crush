@@ -40,6 +40,7 @@ import (
 	"github.com/charmbracelet/crush/internal/agent/tools/mcp"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/csync"
+	"github.com/charmbracelet/crush/internal/hooks"
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/charmbracelet/crush/internal/session"
@@ -203,6 +204,67 @@ type sessionAgent struct {
 	// across the agent. Cancel uses its current value as the per-session
 	// high-water mark.
 	acceptSeqGen uint64
+
+	// onLifecycleEvent fires ModelRequestStart/Stop hooks. Nil for
+	// sub-agents.
+	onLifecycleEvent func(ctx context.Context, eventName, sessionID string, opts hooks.PayloadOpts)
+}
+
+// fireModelEvent dispatches a model-request lifecycle hook if a
+// callback was wired (top-level agent only). It fires asynchronously
+// with a fresh bounded context so a slow hook never adds latency to
+// the model-request hot path. Provider + model are read at call time
+// for the payload.
+//
+// Async firing means ModelRequestStart/Stop ordering is not strictly
+// guaranteed, but the model request between them takes far longer than
+// a status hook, so in practice they stay ordered. These events are
+// notification-only telemetry; exact interleaving isn't load-bearing.
+func (a *sessionAgent) fireModelEvent(eventName, sessionID, status string) {
+	if a.onLifecycleEvent == nil {
+		return
+	}
+	m := a.largeModel.Get()
+	opts := hooks.PayloadOpts{
+		Provider: m.ModelCfg.Provider,
+		Model:    m.ModelCfg.Model,
+		Status:   status,
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		a.onLifecycleEvent(ctx, eventName, sessionID, opts)
+	}()
+}
+
+// fireAssistantMessageEvent dispatches the AssistantMessage lifecycle
+// hook once a completed assistant turn has been finalized. Like
+// fireModelEvent it fires asynchronously on a fresh bounded context so a
+// slow hook never blocks the stream loop, and it no-ops when no callback
+// was wired (top-level agent only). It is notification-only and can
+// neither block nor deny the turn.
+//
+// tokenCount is a best-effort output-token estimate (the model's reported
+// output tokens when available, otherwise a length-derived fallback);
+// finishReason is the turn's finish reason. The full message text is
+// carried in the JSON payload; BuildEnvOpts truncates the env-var copy.
+func (a *sessionAgent) fireAssistantMessageEvent(sessionID, text string, tokenCount int64, finishReason string) {
+	if a.onLifecycleEvent == nil {
+		return
+	}
+	m := a.largeModel.Get()
+	opts := hooks.PayloadOpts{
+		Provider:          m.ModelCfg.Provider,
+		Model:             m.ModelCfg.Model,
+		MessageText:       text,
+		MessageTokenCount: tokenCount,
+		FinishReason:      finishReason,
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		a.onLifecycleEvent(ctx, hooks.EventAssistantMessage, sessionID, opts)
+	}()
 }
 
 type SessionAgentOptions struct {
@@ -218,6 +280,11 @@ type SessionAgentOptions struct {
 	Tools                []fantasy.AgentTool
 	Notify               pubsub.Publisher[notify.Notification]
 	RunComplete          pubsub.Publisher[notify.RunComplete]
+	// OnLifecycleEvent, when set, fires lifecycle hooks for model
+	// requests (ModelRequestStart / ModelRequestStop). Left nil for
+	// sub-agents so their per-step model calls don't fire the user's
+	// hooks N times per delegated turn.
+	OnLifecycleEvent func(ctx context.Context, eventName, sessionID string, opts hooks.PayloadOpts)
 }
 
 func NewSessionAgent(
@@ -241,6 +308,7 @@ func NewSessionAgent(
 		dispatchMu:           csync.NewMap[string, *sync.Mutex](),
 		acceptedRuns:         csync.NewMap[string, int](),
 		cancelMark:           csync.NewMap[string, uint64](),
+		onLifecycleEvent:     opts.OnLifecycleEvent,
 	}
 }
 
@@ -797,6 +865,9 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		TopK:             call.TopK,
 		FrequencyPenalty: call.FrequencyPenalty,
 		PrepareStep: func(callContext context.Context, options fantasy.PrepareStepFunctionOptions) (_ context.Context, prepared fantasy.PrepareStepResult, err error) {
+			// About to issue a model request for this step.
+			a.fireModelEvent(hooks.EventModelRequestStart, call.SessionID, "")
+
 			prepared.Messages = options.Messages
 			for i := range prepared.Messages {
 				prepared.Messages[i].ProviderOptions = nil
@@ -948,6 +1019,13 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			return createMsgErr
 		},
 		OnStepFinish: func(stepResult fantasy.StepResult) error {
+			// The model request for this step completed.
+			modelStatus := "success"
+			if stepResult.FinishReason == fantasy.FinishReasonError {
+				modelStatus = "error"
+			}
+			a.fireModelEvent(hooks.EventModelRequestStop, call.SessionID, modelStatus)
+
 			finishReason := message.FinishReasonUnknown
 			switch stepResult.FinishReason {
 			case fantasy.FinishReasonLength:
@@ -970,6 +1048,25 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 				}
 			}
 			currentAssistant.AddFinish(finishReason, "", "")
+
+			// Fire the AssistantMessage lifecycle hook once per completed
+			// assistant turn. A step that ends on tool-use is only a
+			// continuation — the model will be called again — so skip it
+			// and fire only on a terminal finish reason (end_turn,
+			// max_tokens, error, or a tool result that halted the turn,
+			// all of which AddFinish has just recorded). Firing is async
+			// and notification-only, so it never blocks the stream loop or
+			// the sessionLock taken just below.
+			if finishReason != message.FinishReasonToolUse {
+				assistantText := currentAssistant.Content().String()
+				a.fireAssistantMessageEvent(
+					call.SessionID,
+					assistantText,
+					assistantMessageTokenCount(stepResult, assistantText),
+					string(finishReason),
+				)
+			}
+
 			sessionLock.Lock()
 			defer sessionLock.Unlock()
 
@@ -1876,6 +1973,18 @@ func summaryCompletionTokens(usage fantasy.Usage, summaryMessage message.Message
 		return usage.OutputTokens
 	}
 	return approxTokenCount(summaryMessage.Content().Text) + approxTokenCount(summaryMessage.ReasoningContent().String())
+}
+
+// assistantMessageTokenCount estimates the output-token count for a
+// completed assistant turn surfaced via the AssistantMessage lifecycle
+// hook. It prefers the model's reported output tokens and falls back to a
+// length-derived estimate from the message text when the provider did not
+// report usage (e.g. some local models). Mirrors summaryCompletionTokens.
+func assistantMessageTokenCount(stepResult fantasy.StepResult, text string) int64 {
+	if stepResult.Usage.OutputTokens != 0 {
+		return stepResult.Usage.OutputTokens
+	}
+	return approxTokenCount(text)
 }
 
 func (a *sessionAgent) Cancel(sessionID string) {

@@ -17,8 +17,12 @@ forward.
 - Hooks are Claude Code-compatible
 - Crush ships with a builtin `crush-hook` skill write, edit, and configure
   hooks; just tell Crush how to configure Crush
-- Crush currently supports just one hook, `PreToolUse`, with plans to support
-  the full gamut; please let us know which hooks you'd like to see next
+- Crush supports a full set of lifecycle hooks: `SessionStart`,
+  `UserPromptSubmit`, `ModelRequestStart`, `ModelRequestStop`,
+  `PermissionRequest`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`,
+  `Stop`, and `SessionEnd`. `PreToolUse` is the only one that can block,
+  halt, or rewrite — the rest are notification-only (great for status
+  bars, desktop notifications, audit logs)
 - Hooks run in parallel for speed, but their results compose in config order
   for determinism
 
@@ -176,29 +180,94 @@ wins when rewriting input, but first deny wins when blocking.
 
 ## Events
 
-Here are the events you can hook into (spoiler: there's currently just one):
-
-### PreToolUse
-
-This hook fires before every tool call. Use it to block dangerous commands,
-enforce policies, rewrite tool input, inject context the model should see, log
-stuff, and so on.
-
-**Matched against**: the tool name (e.g. `bash`, `edit`, `write`,
-`mcp_github_create_pull_request`).
+Crush fires hooks at these points in the lifecycle. `PreToolUse` is the only
+**control** hook (it can deny, halt, or rewrite); the rest are
+**notification-only** — Crush runs them for side effects and ignores any
+decision they return, so they can't block the agent.
 
 > [!NOTE]
 > Event names are case insensitive and snake-caseable, so `PreToolUse`,
-> `pretooluse`, `PRETOOLUSE`, `pre_tool_use`, and `PRE_TOOL_USE` all work.
+> `pretooluse`, `PRETOOLUSE`, `pre_tool_use`, and `PRE_TOOL_USE` all work. The
+> same applies to every event below.
 
-**Scope**: `PreToolUse` only fires on the **top-level agent's** tool calls.
-Sub-agents (the `agent` task tool, `agentic_fetch`, etc.) run without hook
-interception so a single delegated turn doesn't trigger your hook N times. The
-outer sub-agent tool call itself _is_ hooked, so policy like "never let the
-agent spawn sub-agents" still works.
+> [!NOTE]
+> All events fire on the **top-level agent only**. Sub-agents (the `agent`
+> task tool, `agentic_fetch`, etc.) run without hook interception so a single
+> delegated turn doesn't trigger your hook N times. The outer sub-agent tool
+> call itself _is_ hooked, so policy like "never let the agent spawn
+> sub-agents" still works.
 
-Hooks are keyed by event name. Only `command` is required, and you can omit
-`matcher` to match all tools.
+### PreToolUse
+
+Fires before every tool call. The only control hook: block dangerous commands,
+enforce policies, rewrite tool input, inject context, auto-approve, log.
+
+**Matched against**: the tool name (e.g. `bash`, `edit`, `write`,
+`mcp_github_create_pull_request`). Omit `matcher` to match all tools.
+
+### Lifecycle (notification-only)
+
+These can't block the agent — they fire for side effects. Ideal for driving a
+tmux status bar, desktop notifications, audit logs, or metrics. They are not
+matched against a tool name; every configured hook for the event fires.
+
+| Event | Fires when | Typical use |
+| --- | --- | --- |
+| `SessionStart` | Crush starts up | initialize external state |
+| `UserPromptSubmit` | a prompt is submitted, before processing | mark agent "running" |
+| `ModelRequestStart` | a model request begins (once per step) | show "thinking" |
+| `ModelRequestStop` | a model request completes (`status=success\|error`) | — |
+| `PermissionRequest` | a tool call blocks for your approval | mark agent "needs input" |
+| `PostToolUse` | a tool call succeeds (`status=success`) | back to "running" |
+| `PostToolUseFailure` | a tool call errors or is denied (`status=error\|denied`) | — |
+| `AssistantMessage` | a completed assistant message is finalized (once per turn, not per token) | log the reply, count tokens |
+| `Stop` | a turn finishes — success, error, cancel, or interrupt (`status=…`) | mark agent "done" |
+| `SessionEnd` | Crush exits (`reason=exit`) | clear the indicator |
+
+> **Note on `SessionStart` / `SessionEnd`**: despite the name, these fire on
+> **process** start and exit — once when the `crush` process comes up and once
+> when it shuts down — not once per chat session. They also fire in
+> non-interactive runs (`crush run`). Because no chat session exists at process
+> start (and the process may span many sessions), their `session_id` /
+> `CRUSH_SESSION_ID` is **empty**. Use them to initialize and tear down
+> process-wide external state, not to track individual conversations.
+
+**Lifecycle guarantee**: every `UserPromptSubmit` is eventually followed by a
+`Stop` for that turn, on every exit path (normal completion, model/tool error,
+cancellation, interruption). So an indicator that flips to "running" on
+`UserPromptSubmit` always sees a terminal `Stop`. A typical turn with a tool
+call fires:
+
+```text
+UserPromptSubmit
+ModelRequestStart
+ModelRequestStop
+PreToolUse
+PostToolUse
+ModelRequestStart
+ModelRequestStop
+Stop
+```
+
+`AssistantMessage` fires **once per completed assistant message**, after the
+model finishes a turn — not per streamed token. A turn that ends with tool
+calls is a continuation (the model is called again), so the event fires only on
+the turn's terminal step, just before `Stop`:
+
+```text
+UserPromptSubmit
+ModelRequestStart
+ModelRequestStop
+AssistantMessage
+Stop
+```
+
+It carries the assistant text, a best-effort output-token estimate, and the
+finish reason (see the env vars and JSON fields below). Like the other
+lifecycle events it is notification-only — it can neither block nor rewrite the
+turn.
+
+Hooks are keyed by event name. Only `command` is required.
 
 ## Building Hooks
 
@@ -244,7 +313,18 @@ The available environment variables are:
 | `CRUSH_PROJECT_DIR`          | Project root directory.                        |
 | `CRUSH_TOOL_INPUT_COMMAND`   | For `bash` calls: the shell command being run. |
 | `CRUSH_TOOL_INPUT_FILE_PATH` | For file tools: the target file path.          |
+| `CRUSH_TURN_ID`              | Turn correlator (lifecycle events).            |
+| `CRUSH_PROVIDER`             | Provider id (`ModelRequest*`).                 |
+| `CRUSH_MODEL`                | Model id (`ModelRequest*`).                    |
+| `CRUSH_PERMISSION_KIND`      | Permission action (`PermissionRequest`).       |
+| `CRUSH_PERMISSION_MESSAGE`   | Human-readable description (`PermissionRequest`). |
+| `CRUSH_STATUS`               | Outcome, e.g. `success`/`error`/`cancelled` (`Stop`, `ModelRequestStop`, `Post*`). |
+| `CRUSH_MESSAGE_KIND`         | `partial`/`final` (reserved; unused by the once-per-message `AssistantMessage`). |
+| `CRUSH_ASSISTANT_MESSAGE_TEXT` | Assistant reply text, truncated to ~4KB (`AssistantMessage`). Full text is in the JSON `message_text`. |
+| `CRUSH_ASSISTANT_MESSAGE_FINISH_REASON` | Turn finish reason, e.g. `end_turn`/`max_tokens`/`error` (`AssistantMessage`). |
+| `CRUSH_ASSISTANT_MESSAGE_TOKEN_COUNT` | Best-effort output-token estimate (`AssistantMessage`). |
 
+Only the variables relevant to a given event are set; the rest are absent.
 The `CRUSH`, `AGENT`, and `AI_AGENT` markers are also set by the `bash`
 tool, so a script can detect "am I running under Crush?" the same way in
 either context.
@@ -526,6 +606,46 @@ tool call always proceeds.
 ```jsonc
 { "command": "echo \"$(date -Iseconds) $CRUSH_TOOL_NAME\" >> ./tools.log" }
 ```
+
+### Drive a tmux status indicator
+
+Lifecycle hooks make Crush a first-class citizen of an external status display.
+Wire the notification events to a script that updates your tmux status line, a
+desktop indicator, or whatever you like — Crush will tell you when it's
+working, blocked on you, or done.
+
+```jsonc
+{
+  "hooks": {
+    "UserPromptSubmit": [{ "command": "crush-status running" }],
+    "PermissionRequest": [{ "command": "crush-status needs-input" }],
+    "PostToolUse": [{ "command": "crush-status running" }],
+    "Stop": [{ "command": "crush-status done" }],
+    "SessionEnd": [{ "command": "crush-status off" }],
+  },
+}
+```
+
+The script reads `CRUSH_EVENT` (or the `event` field on stdin) and maps it to a
+state:
+
+```bash
+#!/usr/bin/env bash
+# crush-status — flip a tmux user option the status line reads.
+state="${1:-$CRUSH_EVENT}"
+case "$state" in
+  running|UserPromptSubmit|PostToolUse|ModelRequestStart) s="running" ;;
+  needs-input|PermissionRequest)                           s="needs-input" ;;
+  done|Stop)                                               s="done" ;;
+  off|SessionEnd)                                          s="off" ;;
+  *) exit 0 ;;
+esac
+[ -n "$TMUX" ] && tmux set-option -p @crush_state "$s"
+printf '{}\n'   # side-effect only; no decision
+```
+
+Because every `UserPromptSubmit` is guaranteed a matching `Stop` (even on error,
+cancel, or interrupt), the indicator never gets stuck on `running`.
 
 ### A real-world Example:
 

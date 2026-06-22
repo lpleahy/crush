@@ -28,6 +28,7 @@ import (
 	"github.com/charmbracelet/crush/internal/filetracker"
 	"github.com/charmbracelet/crush/internal/format"
 	"github.com/charmbracelet/crush/internal/history"
+	"github.com/charmbracelet/crush/internal/hooks"
 	"github.com/charmbracelet/crush/internal/log"
 	"github.com/charmbracelet/crush/internal/lsp"
 	"github.com/charmbracelet/crush/internal/message"
@@ -163,7 +164,23 @@ func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore, skillsMgr
 	})
 	go app.LSPManager.TrackConfigured()
 
+	app.fireSessionStart(ctx)
+
 	return app, nil
+}
+
+// fireSessionStart fires the SessionStart lifecycle hook so external
+// integrations can initialize state when crush comes up. session_id is
+// empty — no chat session exists yet at process start.
+func (app *App) fireSessionStart(ctx context.Context) {
+	cfg := app.config.Config()
+	hookCfgs := cfg.Hooks[hooks.EventSessionStart]
+	if len(hookCfgs) == 0 {
+		return
+	}
+	fireCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	hooks.FireNotification(fireCtx, hookCfgs, hooks.EventSessionStart, "", app.config.WorkingDir(), hooks.PayloadOpts{})
 }
 
 // Config returns the pure-data configuration.
@@ -644,6 +661,12 @@ func (app *App) Shutdown() {
 	start := time.Now()
 	defer func() { slog.Debug("Shutdown took " + time.Since(start).String()) }()
 
+	// Fire SessionEnd synchronously and early — before background
+	// shells are killed and the process exits — so a status indicator
+	// reliably clears (reason=exit). Bounded so a wedged hook can't
+	// stall shutdown.
+	app.fireSessionEnd()
+
 	// First, cancel all agents and wait for them to finish. This must complete
 	// before closing the DB so agents can finish writing their state.
 	if app.AgentCoordinator != nil {
@@ -693,6 +716,24 @@ func (app *App) Shutdown() {
 		}
 	}
 	wg.Wait()
+}
+
+// fireSessionEnd fires the SessionEnd lifecycle hook (reason=exit) so
+// external integrations can clear their state on shutdown. Bounded to
+// 5 seconds so a slow hook can't stall process exit.
+func (app *App) fireSessionEnd() {
+	if app.config == nil {
+		return
+	}
+	hookCfgs := app.config.Config().Hooks[hooks.EventSessionEnd]
+	if len(hookCfgs) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	hooks.FireNotification(ctx, hookCfgs, hooks.EventSessionEnd, "", app.config.WorkingDir(), hooks.PayloadOpts{
+		Reason: "exit",
+	})
 }
 
 // checkForUpdates checks for available updates.

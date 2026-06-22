@@ -40,6 +40,8 @@ func (m *mockPermissionService) SubscribeNotifications(ctx context.Context) <-ch
 	return make(<-chan pubsub.Event[permission.PermissionNotification])
 }
 
+func (m *mockPermissionService) SetOnRequestBlocked(fn func(permission.PermissionRequest)) {}
+
 type mockHistoryService struct {
 	*pubsub.Broker[history.File]
 }

@@ -322,6 +322,26 @@ func TestSummaryCompletionTokens(t *testing.T) {
 	require.Zero(t, summaryCompletionTokens(fantasy.Usage{}, message.Message{}))
 }
 
+// TestAssistantMessageTokenCount covers the best-effort output-token
+// estimate carried by the AssistantMessage lifecycle hook: the provider's
+// reported output tokens win when present, otherwise a length-derived
+// estimate from the message text is used; empty text with no usage is 0.
+func TestAssistantMessageTokenCount(t *testing.T) {
+	t.Parallel()
+
+	// Reported usage is preferred over the length estimate, even when the
+	// text would imply a different (here larger) count.
+	withUsage := fantasy.StepResult{Response: fantasy.Response{Usage: fantasy.Usage{OutputTokens: 7}}}
+	require.Equal(t, int64(7), assistantMessageTokenCount(withUsage, "some much longer assistant reply text"))
+
+	// With no reported usage, fall back to the length-derived estimate.
+	noUsage := fantasy.StepResult{}
+	require.Equal(t, approxTokenCount("hello world"), assistantMessageTokenCount(noUsage, "hello world"))
+
+	// No usage and no text means zero.
+	require.Zero(t, assistantMessageTokenCount(fantasy.StepResult{}, ""))
+}
+
 func TestUpdateSessionUsageAddsProviderCost(t *testing.T) {
 	t.Parallel()
 
