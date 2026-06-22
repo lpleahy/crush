@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/charmbracelet/crush/internal/oauth"
 	"github.com/charmbracelet/crush/internal/oauth/copilot"
 	"github.com/charmbracelet/crush/internal/oauth/hyper"
+	"github.com/charmbracelet/crush/internal/oauth/openai"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/pkg/browser"
 	"github.com/spf13/cobra"
@@ -25,13 +28,16 @@ var loginCmd = &cobra.Command{
 	Short:   "Login Crush to a platform",
 	Long: `Login Crush to a specified platform.
 The platform should be provided as an argument.
-Available platforms are: hyper, copilot.`,
+Available platforms are: hyper, copilot, chatgpt.`,
 	Example: `
 # Authenticate with Charm Hyper
 crush login
 
 # Authenticate with GitHub Copilot
 crush login copilot
+
+# Authenticate with a ChatGPT subscription
+crush login chatgpt
 
 # Force re-authentication even if already logged in
 crush login -f copilot
@@ -41,6 +47,8 @@ crush login -f copilot
 		"copilot",
 		"github",
 		"github-copilot",
+		"chatgpt",
+		"openai-chatgpt",
 	},
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -61,11 +69,14 @@ crush login -f copilot
 			provider = args[0]
 		}
 		force, _ := cmd.Flags().GetBool("force")
+		noBrowser, _ := cmd.Flags().GetBool("no-browser")
 		switch provider {
 		case "hyper":
 			return loginHyper(c, ws.ID, force)
 		case "copilot", "github", "github-copilot":
 			return loginCopilot(c, ws.ID, force)
+		case "chatgpt", "openai-chatgpt":
+			return loginChatGPT(c, ws.ID, force, noBrowser)
 		default:
 			return fmt.Errorf("unknown platform: %s", args[0])
 		}
@@ -74,6 +85,7 @@ crush login -f copilot
 
 func init() {
 	loginCmd.Flags().BoolP("force", "f", false, "Force re-authentication even if already logged in")
+	loginCmd.Flags().Bool("no-browser", false, "Don't try to open a browser automatically (for SSH/headless use)")
 }
 
 func loginHyper(c *client.Client, wsID string, force bool) error {
@@ -212,6 +224,91 @@ func loginCopilot(c *client.Client, wsID string, force bool) error {
 	fmt.Println()
 	fmt.Println("You're now authenticated with GitHub Copilot!")
 	return nil
+}
+
+func loginChatGPT(c *client.Client, wsID string, force, noBrowser bool) error {
+	loginCtx := getLoginContext()
+
+	if !force {
+		if cfg, err := c.GetConfig(loginCtx, wsID); err == nil && cfg != nil {
+			if pc, ok := cfg.Providers.Get("chatgpt"); ok && pc.OAuthToken != nil {
+				fmt.Println("You are already logged in to ChatGPT.")
+				fmt.Println("Use --force to re-authenticate.")
+				return nil
+			}
+		}
+	}
+
+	headless := noBrowser || isSSHSession()
+
+	var browserOpener openai.BrowserOpener
+	if !headless {
+		browserOpener = browserOpenerFunc(browser.OpenURL)
+	}
+
+	fmt.Println("Starting ChatGPT sign-in...")
+
+	result, err := openai.Authorize(loginCtx, openai.AuthorizeOptions{
+		Browser: browserOpener,
+		OnReady: func(authURL string) {
+			fmt.Println()
+			fmt.Println("Open the following URL in your browser to sign in:")
+			fmt.Println(lipgloss.NewStyle().Hyperlink(authURL, "id=chatgpt").Render(authURL))
+			fmt.Println()
+			if headless {
+				fmt.Println("After signing in, your browser will try to redirect to")
+				fmt.Println("http://localhost:1455. If that URL won't load on this machine,")
+				fmt.Println("paste the full localhost URL it tried to load here:")
+				go pasteCallback()
+			} else {
+				fmt.Println("Waiting for authorization...")
+			}
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("Exchanging authorization code...")
+	token, err := openai.TokenExchange(loginCtx, result.Code, result.Verifier)
+	if err != nil {
+		return err
+	}
+
+	if err := cmp.Or(
+		c.SetConfigField(loginCtx, wsID, config.ScopeGlobal, "providers.chatgpt.api_key", token.AccessToken),
+		c.SetConfigField(loginCtx, wsID, config.ScopeGlobal, "providers.chatgpt.oauth", token),
+	); err != nil {
+		return err
+	}
+
+	fmt.Println()
+	fmt.Println("You're now authenticated with ChatGPT!")
+	return nil
+}
+
+type browserOpenerFunc func(url string) error
+
+func (f browserOpenerFunc) Open(url string) error { return f(url) }
+
+func isSSHSession() bool {
+	return os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_CLIENT") != ""
+}
+
+func pasteCallback() {
+	var pasted string
+	if _, err := fmt.Scanln(&pasted); err != nil {
+		return
+	}
+	u, err := url.Parse(pasted)
+	if err != nil || u.RawQuery == "" {
+		return
+	}
+	// Replay the callback against our own loopback listener. The
+	// handler running inside openai.Authorize picks up the code.
+	// Use the same redirect URI Authorize advertised so any future
+	// change there flows through automatically.
+	_, _ = http.Get(openai.DefaultRedirectURI + "?" + u.RawQuery)
 }
 
 func getLoginContext() context.Context {

@@ -4,12 +4,14 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/client"
 	"github.com/charmbracelet/crush/internal/config"
+	"github.com/charmbracelet/crush/internal/oauth/openai"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/spf13/cobra"
 )
@@ -27,19 +29,24 @@ var logoutCmd = &cobra.Command{
 	Long: `Logout Crush from a specified platform, removing stored credentials.
 The platform should be provided as an argument.
 If no argument is given, a list of logged-in platforms will be shown.
-Available platforms are: hyper, copilot.`,
+Available platforms are: hyper, copilot, chatgpt.`,
 	Example: `
 # Sign out from Charm Hyper
 crush logout hyper
 
 # Sign out from GitHub Copilot
 crush logout copilot
+
+# Sign out from ChatGPT
+crush logout chatgpt
   `,
 	ValidArgs: []cobra.Completion{
 		"hyper",
 		"copilot",
 		"github",
 		"github-copilot",
+		"chatgpt",
+		"openai-chatgpt",
 	},
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -84,6 +91,8 @@ crush logout copilot
 			return logoutHyper(c, ws.ID)
 		case "copilot", "github", "github-copilot":
 			return logoutCopilot(c, ws.ID)
+		case "chatgpt", "openai-chatgpt":
+			return logoutChatGPT(c, ws.ID)
 		default:
 			return fmt.Errorf("unknown platform: %s", provider)
 		}
@@ -115,6 +124,31 @@ func logoutCopilot(c *client.Client, wsID string) error {
 	}
 
 	fmt.Println(logoutHeaderStyle.Render("Successfully logged out of GitHub Copilot."))
+	return nil
+}
+
+func logoutChatGPT(c *client.Client, wsID string) error {
+	ctx := getLogoutContext()
+
+	// Best-effort revoke before dropping local credentials. A failure
+	// here (network down, server-side error) must not block logout —
+	// the local token is removed regardless so the user is signed out.
+	if cfg, err := c.GetConfig(ctx, wsID); err == nil && cfg != nil {
+		if pc, ok := cfg.Providers.Get("chatgpt"); ok && pc.OAuthToken != nil && pc.OAuthToken.RefreshToken != "" {
+			if err := openai.RevokeToken(ctx, pc.OAuthToken.RefreshToken); err != nil {
+				slog.Debug("chatgpt logout: revoke failed, removing local token anyway", "error", err)
+			}
+		}
+	}
+
+	if err := cmp.Or(
+		c.RemoveConfigField(ctx, wsID, config.ScopeGlobal, "providers.chatgpt.api_key"),
+		c.RemoveConfigField(ctx, wsID, config.ScopeGlobal, "providers.chatgpt.oauth"),
+	); err != nil {
+		return err
+	}
+
+	fmt.Println(logoutHeaderStyle.Render("Successfully logged out of ChatGPT."))
 	return nil
 }
 
