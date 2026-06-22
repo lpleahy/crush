@@ -32,6 +32,17 @@ const (
 	// silently disappears from /models and inference returns "not
 	// supported". Override at runtime via CRUSH_CODEX_CLI_VERSION.
 	DefaultCodexCliVersion = "0.130.0"
+
+	// Device flow URLs (non-RFC-8628; Codex's own shape).
+	// Verification URL is where the user visits in their browser to
+	// enter the code; OpenAI renders the styled "Signed in to Codex"
+	// page on success. Redirect URI is what gets sent in the final
+	// token exchange (the auth server already redirected there
+	// internally — we just have to match what was bound to the code).
+	DefaultDeviceUserCodeURL     = "https://auth.openai.com/api/accounts/deviceauth/usercode"
+	DefaultDeviceTokenURL        = "https://auth.openai.com/api/accounts/deviceauth/token"
+	DefaultDeviceVerificationURL = "https://auth.openai.com/codex/device"
+	DefaultDeviceRedirectURI     = "https://auth.openai.com/deviceauth/callback"
 )
 
 // CodexCliVersion returns the codex_cli_rs version string to mimic.
