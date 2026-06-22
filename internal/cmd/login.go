@@ -4,8 +4,6 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 
@@ -85,7 +83,7 @@ crush login -f copilot
 
 func init() {
 	loginCmd.Flags().BoolP("force", "f", false, "Force re-authentication even if already logged in")
-	loginCmd.Flags().Bool("no-browser", false, "Don't try to open a browser automatically (for SSH/headless use)")
+	loginCmd.Flags().Bool("no-browser", false, "Use the device-code flow instead of opening a local browser (for SSH/headless use)")
 }
 
 func loginHyper(c *client.Client, wsID string, force bool) error {
@@ -226,6 +224,11 @@ func loginCopilot(c *client.Client, wsID string, force bool) error {
 	return nil
 }
 
+// loginChatGPT dispatches to either the browser-based PKCE+loopback
+// flow or the device flow depending on whether the user has a
+// browser available locally. Both flows persist the resulting token
+// to the same provider config fields so downstream code doesn't care
+// which path minted it.
 func loginChatGPT(c *client.Client, wsID string, force, noBrowser bool) error {
 	loginCtx := getLoginContext()
 
@@ -239,30 +242,26 @@ func loginChatGPT(c *client.Client, wsID string, force, noBrowser bool) error {
 		}
 	}
 
-	headless := noBrowser || isSSHSession()
-
-	var browserOpener openai.BrowserOpener
-	if !headless {
-		browserOpener = browserOpenerFunc(browser.OpenURL)
+	if noBrowser || isSSHSession() {
+		return loginChatGPTDevice(loginCtx, c, wsID)
 	}
+	return loginChatGPTBrowser(loginCtx, c, wsID)
+}
 
+// loginChatGPTBrowser runs the PKCE + loopback flow against
+// auth.openai.com/oauth/authorize, catching the callback on
+// localhost:1455. Requires an interactive browser on this machine.
+func loginChatGPTBrowser(loginCtx context.Context, c *client.Client, wsID string) error {
 	fmt.Println("Starting ChatGPT sign-in...")
 
 	result, err := openai.Authorize(loginCtx, openai.AuthorizeOptions{
-		Browser: browserOpener,
+		Browser: browserOpenerFunc(browser.OpenURL),
 		OnReady: func(authURL string) {
 			fmt.Println()
 			fmt.Println("Open the following URL in your browser to sign in:")
 			fmt.Println(lipgloss.NewStyle().Hyperlink(authURL, "id=chatgpt").Render(authURL))
 			fmt.Println()
-			if headless {
-				fmt.Println("After signing in, your browser will try to redirect to")
-				fmt.Println("http://localhost:1455. If that URL won't load on this machine,")
-				fmt.Println("paste the full localhost URL it tried to load here:")
-				go pasteCallback()
-			} else {
-				fmt.Println("Waiting for authorization...")
-			}
+			fmt.Println("Waiting for authorization...")
 		},
 	})
 	if err != nil {
@@ -275,13 +274,46 @@ func loginChatGPT(c *client.Client, wsID string, force, noBrowser bool) error {
 		return err
 	}
 
-	if err := cmp.Or(
-		c.SetConfigField(loginCtx, wsID, config.ScopeGlobal, "providers.chatgpt.api_key", token.AccessToken),
-		c.SetConfigField(loginCtx, wsID, config.ScopeGlobal, "providers.chatgpt.oauth", token),
-	); err != nil {
+	return persistChatGPTToken(loginCtx, c, wsID, token)
+}
+
+// loginChatGPTDevice runs the device authorization flow against
+// auth.openai.com/api/accounts/deviceauth. No local browser needed —
+// the user enters a code on any device with a browser and OpenAI
+// renders the styled success page on auth.openai.com directly.
+func loginChatGPTDevice(loginCtx context.Context, c *client.Client, wsID string) error {
+	fmt.Println("Requesting device code from OpenAI...")
+	dc, err := openai.RequestDeviceCode(loginCtx)
+	if err != nil {
 		return err
 	}
 
+	clipboard.WriteText(dc.UserCode)
+	fmt.Println("The following code should be on your clipboard already:")
+	fmt.Println()
+	fmt.Println(lipgloss.NewStyle().Bold(true).Render(dc.UserCode))
+	fmt.Println()
+	fmt.Println("Open this URL on any device and enter the code:")
+	fmt.Println()
+	fmt.Println(lipgloss.NewStyle().Hyperlink(dc.VerificationURL, "id=chatgpt-device").Render(dc.VerificationURL))
+	fmt.Println()
+	fmt.Println("Waiting for authorization...")
+
+	token, err := openai.PollForDeviceToken(loginCtx, dc)
+	if err != nil {
+		return err
+	}
+
+	return persistChatGPTToken(loginCtx, c, wsID, token)
+}
+
+func persistChatGPTToken(ctx context.Context, c *client.Client, wsID string, token *oauth.Token) error {
+	if err := cmp.Or(
+		c.SetConfigField(ctx, wsID, config.ScopeGlobal, "providers.chatgpt.api_key", token.AccessToken),
+		c.SetConfigField(ctx, wsID, config.ScopeGlobal, "providers.chatgpt.oauth", token),
+	); err != nil {
+		return err
+	}
 	fmt.Println()
 	fmt.Println("You're now authenticated with ChatGPT!")
 	return nil
@@ -293,22 +325,6 @@ func (f browserOpenerFunc) Open(url string) error { return f(url) }
 
 func isSSHSession() bool {
 	return os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_CLIENT") != ""
-}
-
-func pasteCallback() {
-	var pasted string
-	if _, err := fmt.Scanln(&pasted); err != nil {
-		return
-	}
-	u, err := url.Parse(pasted)
-	if err != nil || u.RawQuery == "" {
-		return
-	}
-	// Replay the callback against our own loopback listener. The
-	// handler running inside openai.Authorize picks up the code.
-	// Use the same redirect URI Authorize advertised so any future
-	// change there flows through automatically.
-	_, _ = http.Get(openai.DefaultRedirectURI + "?" + u.RawQuery)
 }
 
 func getLoginContext() context.Context {

@@ -20,6 +20,12 @@ type Client struct {
 	TokenURL     string
 	RevokeURL    string
 
+	// Device-flow endpoints (RequestDeviceCode / PollForDeviceToken).
+	DeviceUserCodeURL     string
+	DeviceTokenURL        string
+	DeviceVerificationURL string
+	DeviceRedirectURI     string
+
 	ClientID    string
 	RedirectURI string
 	Scope       string
@@ -32,14 +38,18 @@ type Client struct {
 // endpoints with a 30-second HTTP timeout.
 func NewClient() *Client {
 	return &Client{
-		AuthorizeURL: DefaultAuthorizeURL,
-		TokenURL:     DefaultTokenURL,
-		RevokeURL:    DefaultRevokeURL,
-		ClientID:     DefaultClientID,
-		RedirectURI:  DefaultRedirectURI,
-		Scope:        DefaultScope,
-		Originator:   DefaultOriginator,
-		HTTPClient:   &http.Client{Timeout: 30 * time.Second},
+		AuthorizeURL:          DefaultAuthorizeURL,
+		TokenURL:              DefaultTokenURL,
+		RevokeURL:             DefaultRevokeURL,
+		DeviceUserCodeURL:     DefaultDeviceUserCodeURL,
+		DeviceTokenURL:        DefaultDeviceTokenURL,
+		DeviceVerificationURL: DefaultDeviceVerificationURL,
+		DeviceRedirectURI:     DefaultDeviceRedirectURI,
+		ClientID:              DefaultClientID,
+		RedirectURI:           DefaultRedirectURI,
+		Scope:                 DefaultScope,
+		Originator:            DefaultOriginator,
+		HTTPClient:            &http.Client{Timeout: 30 * time.Second},
 	}
 }
 

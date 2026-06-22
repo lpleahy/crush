@@ -18,28 +18,40 @@ the same public OAuth flow as OpenAI's official Codex CLI.
 crush login chatgpt
 ```
 
-Crush opens your browser to sign in with OpenAI. After you authorize, the
-browser redirects to a local callback (`http://localhost:1455/auth/callback`)
-that Crush is listening on, and the sign-in completes. The authorize URL is
-also printed to the terminal in case the browser doesn't open on its own.
+By default Crush opens your browser to sign in with OpenAI. After you
+authorize, the browser redirects to a local callback
+(`http://localhost:1455/auth/callback`) that Crush is listening on, and the
+sign-in completes. The authorize URL is also printed to the terminal in case
+the browser doesn't open on its own.
 
 If you're already signed in, the command is a no-op. Use `crush login -f
 chatgpt` to force re-authentication.
 
-### Headless / SSH
+### Headless / SSH (device-code flow)
 
-On a machine where Crush can't open a browser — for example over SSH — pass
-`--no-browser`:
+On a machine where Crush can't open a local browser — for example over SSH —
+pass `--no-browser` to use the device-code flow instead:
 
 ```sh
 crush login --no-browser chatgpt
 ```
 
 Crush also auto-detects SSH sessions (via `SSH_CONNECTION` / `SSH_CLIENT`) and
-switches to this mode on its own. It prints the authorize URL for you to open
-on another device. After you sign in, the browser tries to redirect to
-`http://localhost:1455/...`; if that URL can't load on the remote machine,
-paste the full localhost URL back into the terminal to finish.
+switches to this flow on its own. Crush prints a short user code (and copies it
+to your clipboard) and asks you to open `https://auth.openai.com/codex/device`
+on any device with a browser and enter the code there. Crush polls in the
+background and finishes once you've authorized. The code expires after 15
+minutes.
+
+If your workspace administrator has disabled device login, Crush reports this
+and you can use the browser flow instead (run without `--no-browser`).
+
+### From the TUI
+
+If you pick a ChatGPT model in the model picker without being signed in, Crush
+opens a sign-in modal showing the same device code and verification URL. Press
+`c` to copy the code, or `enter` to copy the code and open the verification
+page in your browser.
 
 ## Logging out
 
