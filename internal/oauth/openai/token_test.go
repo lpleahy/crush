@@ -114,6 +114,78 @@ func TestRefreshToken_PreservesRefreshIfOmitted(t *testing.T) {
 	}
 }
 
+func TestRefreshToken_PropagatesError(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error":             "invalid_grant",
+			"error_description": "refresh token revoked",
+		})
+	})
+
+	if _, err := c.RefreshToken(context.Background(), "dead-refresh"); err == nil {
+		t.Fatal("expected error to propagate from postToken, got nil")
+	}
+}
+
+// Non-200 response whose body is not the standard {error,...} JSON
+// envelope: postToken should fall back to embedding the raw body in
+// the error rather than reporting an empty error code.
+func TestPostToken_NonJSONErrorBody(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("upstream exploded"))
+	})
+
+	_, err := c.TokenExchange(context.Background(), "code", "verifier")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "upstream exploded") {
+		t.Errorf("error should include raw body, got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "502") {
+		t.Errorf("error should include status code 502, got %q", err.Error())
+	}
+}
+
+// A 200 response with a body that isn't valid JSON must surface a
+// decode error, not silently yield a zero token.
+func TestPostToken_MalformedSuccessBody(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("{ this is not json"))
+	})
+
+	_, err := c.TokenExchange(context.Background(), "code", "verifier")
+	if err == nil {
+		t.Fatal("expected decode error, got nil")
+	}
+	if !strings.Contains(err.Error(), "decode token response") {
+		t.Errorf("error should mention decode failure, got %q", err.Error())
+	}
+}
+
+// A 200 response that omits access_token is invalid; postToken must
+// reject it rather than hand back a token with an empty AccessToken.
+func TestPostToken_MissingAccessToken(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"refresh_token": "rt",
+			"expires_in":    300,
+		})
+	})
+
+	_, err := c.TokenExchange(context.Background(), "code", "verifier")
+	if err == nil {
+		t.Fatal("expected error for missing access_token, got nil")
+	}
+	if !strings.Contains(err.Error(), "missing access_token") {
+		t.Errorf("error should mention missing access_token, got %q", err.Error())
+	}
+}
+
 func TestPostToken_NetworkError(t *testing.T) {
 	c := NewClient()
 	c.TokenURL = "http://127.0.0.1:1/oauth/token" // unreachable
@@ -144,6 +216,15 @@ func TestRevokeToken_Success(t *testing.T) {
 	}
 	if seenClientID != DefaultClientID {
 		t.Errorf("client_id = %q, want %q", seenClientID, DefaultClientID)
+	}
+}
+
+func TestRevokeToken_NetworkError(t *testing.T) {
+	c := NewClient()
+	c.RevokeURL = "http://127.0.0.1:1/oauth/revoke" // unreachable
+	c.HTTPClient = &http.Client{Timeout: 200 * time.Millisecond}
+	if err := c.RevokeToken(context.Background(), "rt"); err == nil {
+		t.Fatal("expected error from unreachable revoke endpoint, got nil")
 	}
 }
 

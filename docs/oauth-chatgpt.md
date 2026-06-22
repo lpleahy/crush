@@ -18,14 +18,26 @@ the same public OAuth flow as OpenAI's official Codex CLI.
 crush login chatgpt
 ```
 
-By default Crush opens your browser to sign in with OpenAI. After you
-authorize, the browser redirects to a local callback
-(`http://localhost:1455/auth/callback`) that Crush is listening on, and the
-sign-in completes. The authorize URL is also printed to the terminal in case
-the browser doesn't open on its own.
+If you already use OpenAI's Codex CLI and are signed in there, Crush reuses
+that credential automatically — see [Reusing a Codex CLI
+login](#reusing-a-codex-cli-login) below. Otherwise Crush opens your browser to
+sign in with OpenAI. After you authorize, the browser redirects to a local
+callback (`http://localhost:1455/auth/callback`) that Crush is listening on, and
+the sign-in completes. The authorize URL is also printed to the terminal in
+case the browser doesn't open on its own.
 
-If you're already signed in, the command is a no-op. Use `crush login -f
-chatgpt` to force re-authentication.
+If you're already signed in to Crush, the command is a no-op. Use `crush login
+-f chatgpt` to force re-authentication.
+
+### Reusing a Codex CLI login
+
+If OpenAI's Codex CLI has already signed you in, Crush imports that credential
+so you don't have to sign in twice. On `crush login chatgpt`, Crush looks for
+the Codex credential file at `$CODEX_HOME/auth.json` (when `CODEX_HOME` is set)
+or `~/.codex/auth.json` by default. If a usable token is found, Crush refreshes
+it to confirm it's valid and signs you in with it. If the file is missing or
+the token can't be reused, Crush falls back to the interactive sign-in (device
+flow when headless, browser otherwise).
 
 ### Headless / SSH (device-code flow)
 
@@ -83,6 +95,7 @@ TLS, so its contents are trusted.
 
 | Variable                  | Purpose                                                    |
 | ------------------------- | ---------------------------------------------------------- |
+| `CODEX_HOME`              | Directory holding the Codex CLI credential file to import (`$CODEX_HOME/auth.json`). Defaults to `~/.codex`. |
 | `CRUSH_CODEX_CLI_VERSION` | Codex CLI version Crush mimics in the User-Agent and the `client_version` query param sent to `/models`. Defaults to a pinned value. |
 
 The default `CRUSH_CODEX_CLI_VERSION` is pinned in the source. The ChatGPT

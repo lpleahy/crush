@@ -220,6 +220,91 @@ func TestAdaptRequestBody_StripsRejectedFields(t *testing.T) {
 	}
 }
 
+// A bare JSON null unmarshals into a nil map; AdaptRequestBody must
+// recover by allocating a fresh map and still produce a valid Codex
+// request (store=false, default instructions, include set).
+func TestAdaptRequestBody_NullBody(t *testing.T) {
+	out, err := AdaptRequestBody([]byte(`null`), AdaptOptions{ClientName: "crush"})
+	if err != nil {
+		t.Fatalf("AdaptRequestBody(null) error: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if m["store"] != false {
+		t.Errorf("store = %v, want false", m["store"])
+	}
+	if m["instructions"] != defaultInstructions {
+		t.Errorf("instructions = %v, want %q", m["instructions"], defaultInstructions)
+	}
+	if _, ok := m["include"]; !ok {
+		t.Error("include missing")
+	}
+}
+
+// An input[] element that is not a JSON object (here a bare string)
+// can't be parsed as a role-bearing item; adaptInstructions must keep
+// it verbatim rather than drop it, and fall back to default instructions.
+func TestAdaptRequestBody_NonObjectInputItemKept(t *testing.T) {
+	in := []byte(`{"input":["just-a-string",{"role":"user","content":"hi"}]}`)
+	out, err := AdaptRequestBody(in, AdaptOptions{})
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	var m map[string]any
+	_ = json.Unmarshal(out, &m)
+	// No system/developer items, so default instructions and input
+	// is left untouched (both original elements preserved).
+	if m["instructions"] != defaultInstructions {
+		t.Errorf("instructions = %v, want %q", m["instructions"], defaultInstructions)
+	}
+	input, ok := m["input"].([]any)
+	if !ok {
+		t.Fatalf("input is %T, want []any", m["input"])
+	}
+	if len(input) != 2 {
+		t.Fatalf("input should retain both elements, got %d: %v", len(input), input)
+	}
+	if input[0] != "just-a-string" {
+		t.Errorf("non-object input element should be kept verbatim, got %v", input[0])
+	}
+}
+
+// A system message whose content is neither a plain string nor an
+// array of typed text parts (here a number) yields no extractable
+// text, so instructions fall back to the default. Because no system
+// text was collected, input[] is left untouched (the rewrite only
+// happens when at least one system part is extracted).
+func TestAdaptRequestBody_SystemContentNotText(t *testing.T) {
+	in := []byte(`{"input":[{"role":"system","content":42},{"role":"user","content":"hi"}]}`)
+	out, err := AdaptRequestBody(in, AdaptOptions{})
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	var m map[string]any
+	_ = json.Unmarshal(out, &m)
+	if m["instructions"] != defaultInstructions {
+		t.Errorf("instructions = %v, want default %q", m["instructions"], defaultInstructions)
+	}
+}
+
+// A system item with no content field at all (or explicit null) gives
+// extractContentText an empty json.RawMessage; it must return "" and
+// instructions fall back to the default.
+func TestAdaptRequestBody_SystemMissingContent(t *testing.T) {
+	in := []byte(`{"input":[{"role":"system"},{"role":"user","content":"hi"}]}`)
+	out, err := AdaptRequestBody(in, AdaptOptions{})
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	var m map[string]any
+	_ = json.Unmarshal(out, &m)
+	if m["instructions"] != defaultInstructions {
+		t.Errorf("instructions = %v, want default %q", m["instructions"], defaultInstructions)
+	}
+}
+
 func TestAdaptRequestBody_ConcatenatesMultipleSystemMessages(t *testing.T) {
 	in := []byte(`{
 		"input":[

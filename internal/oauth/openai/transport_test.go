@@ -319,6 +319,104 @@ func TestLogChatGPTBlock_NonForbidden(t *testing.T) {
 	}
 }
 
+// A JSON-typed body that is valid JSON but not a JSON object (here a
+// top-level array) can't be adapted into a Codex request; RoundTrip
+// must pass it through unchanged rather than error or corrupt it.
+func TestTransport_JSONNonObjectPassthrough(t *testing.T) {
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+	}))
+	defer srv.Close()
+
+	c := NewHTTPClient(false)
+	const raw = `[1,2,3]`
+	req, _ := http.NewRequest("POST", srv.URL, strings.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	resp.Body.Close()
+
+	if string(gotBody) != raw {
+		t.Errorf("non-object JSON body should pass through unchanged, got %q", string(gotBody))
+	}
+}
+
+// A 403 carrying Cloudflare's cf-mitigated: challenge header takes the
+// bot-mitigation branch of logChatGPTBlock, which returns early without
+// touching the body. Verify the response (and its body) survive intact.
+func TestLogChatGPTBlock_CloudflareChallenge(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("cf-mitigated", "challenge")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("blocked by cloudflare"))
+	}))
+	defer srv.Close()
+
+	c := NewHTTPClient(false)
+	req, _ := http.NewRequest("GET", srv.URL, nil)
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "blocked by cloudflare" {
+		t.Errorf("body altered by cf-challenge branch, got %q", string(body))
+	}
+}
+
+// A 403 with no body (http.NoBody) must not panic in logChatGPTBlock —
+// it returns early once it sees there's nothing to sniff.
+func TestLogChatGPTBlock_ForbiddenNoBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		// no body written
+	}))
+	defer srv.Close()
+
+	c := NewHTTPClient(false)
+	req, _ := http.NewRequest("GET", srv.URL, nil)
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", resp.StatusCode)
+	}
+}
+
+// Smoke test for the debug transport path (NewHTTPClient(true) →
+// chatgptTransport.next() returns the logging transport). Exercises
+// the otherwise-uncovered debug branch end to end.
+func TestTransport_DebugRoundTrip(t *testing.T) {
+	var seenUA string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenUA = r.Header.Get("User-Agent")
+	}))
+	defer srv.Close()
+
+	c := NewHTTPClient(true)
+	req, _ := http.NewRequest("GET", srv.URL, nil)
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("Do (debug): %v", err)
+	}
+	resp.Body.Close()
+
+	if !strings.Contains(seenUA, "codex_cli_rs/") {
+		t.Errorf("debug transport should still set User-Agent, got %q", seenUA)
+	}
+}
+
 func TestNewUUID(t *testing.T) {
 	s, err := newUUID()
 	if err != nil {

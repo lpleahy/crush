@@ -242,6 +242,18 @@ func loginChatGPT(c *client.Client, wsID string, force, noBrowser bool) error {
 		}
 	}
 
+	// Reuse an existing Codex CLI credential if one is on disk, mirroring
+	// the Copilot flow. We refresh it to obtain a fresh access token,
+	// which also validates the imported refresh token. Any failure here
+	// falls through to the normal interactive sign-in.
+	if diskToken, ok := openai.RefreshTokenFromDisk(); ok {
+		fmt.Println("Found existing ChatGPT token from Codex on disk. Using it to authenticate...")
+		if token, err := openai.RefreshToken(loginCtx, diskToken.RefreshToken); err == nil {
+			return persistChatGPTToken(loginCtx, c, wsID, token)
+		}
+		fmt.Println("Could not reuse the Codex token; continuing with interactive sign-in...")
+	}
+
 	if noBrowser || isSSHSession() {
 		return loginChatGPTDevice(loginCtx, c, wsID)
 	}
