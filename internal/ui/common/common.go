@@ -110,12 +110,21 @@ func CopyToClipboard(text, successMessage string) tea.Cmd {
 // This is useful when you need to perform additional actions like clearing UI state.
 func CopyToClipboardWithCallback(text, successMessage string, callback tea.Cmd) tea.Cmd {
 	return tea.Sequence(
+		SetSystemClipboard(text),
+		callback,
+		util.ReportInfo(successMessage),
+	)
+}
+
+// SetSystemClipboard copies text to the OS clipboard using both OSC 52
+// (terminal escape sequence) and the native clipboard, without reporting a
+// status message. Used for frequent, silent copies such as a vim yank.
+func SetSystemClipboard(text string) tea.Cmd {
+	return tea.Sequence(
 		tea.SetClipboard(text),
 		func() tea.Msg {
 			clipboard.WriteText(text)
 			return nil
 		},
-		callback,
-		util.ReportInfo(successMessage),
 	)
 }
