@@ -56,6 +56,7 @@ type OAuth struct {
 	keyMap  struct {
 		Copy   key.Binding
 		Submit key.Binding
+		Finish key.Binding
 		Close  key.Binding
 	}
 
@@ -102,6 +103,7 @@ func newOAuth(
 
 	m.keyMap.Copy = common.Binding(com.Config(), config.KeybindingGroupOAuth, "copy")
 	m.keyMap.Submit = common.Binding(com.Config(), config.KeybindingGroupOAuth, "submit")
+	m.keyMap.Finish = common.Binding(com.Config(), config.KeybindingGroupOAuth, "finish")
 	m.keyMap.Close = closeBinding(com)
 
 	return &m, tea.Batch(m.spinner.Tick, m.oAuthProvider.initiateAuth)
@@ -127,6 +129,9 @@ func (m *OAuth) HandleMsg(msg tea.Msg) Action {
 
 	case tea.KeyPressMsg:
 		switch {
+		case m.State == OAuthStateSuccess && key.Matches(msg, m.keyMap.Finish):
+			return m.saveKeyAndContinue()
+
 		case key.Matches(msg, m.keyMap.Copy):
 			cmd := m.copyCode()
 			return ActionCmd{cmd}
@@ -321,12 +326,7 @@ func (m *OAuth) ShortHelp() []key.Binding {
 		return []key.Binding{m.keyMap.Close}
 
 	case OAuthStateSuccess:
-		return []key.Binding{
-			key.NewBinding(
-				key.WithKeys("enter", "ctrl+y", "esc"),
-				key.WithHelp("enter", "finish"),
-			),
-		}
+		return []key.Binding{m.keyMap.Finish}
 
 	default:
 		return []key.Binding{
