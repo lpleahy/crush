@@ -250,7 +250,7 @@ func TestDialogKeybindings_BidirectionalDrift(t *testing.T) {
 		t.Fatal("NewOAuthCopilot returned nil")
 	} else {
 		collect("oauth", o.keyMap, map[string]key.Binding{
-			"Copy": o.keyMap.Copy, "Submit": o.keyMap.Submit, "Close": o.keyMap.Close,
+			"Copy": o.keyMap.Copy, "Submit": o.keyMap.Submit, "Finish": o.keyMap.Finish, "Close": o.keyMap.Close,
 		})
 	}
 

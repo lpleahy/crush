@@ -120,6 +120,7 @@ var dialogKeybindings = []KeybindingDescriptor{
 	// oauth (the device-flow sign-in dialog)
 	{KeybindingGroupOAuth, "copy", []string{"c"}, "c", "copy code", "Copy the device code"},
 	{KeybindingGroupOAuth, "submit", []string{"enter", "ctrl+y"}, "enter", "copy & open", "Copy the code and open the URL"},
+	{KeybindingGroupOAuth, "finish", []string{"enter", "ctrl+y", "esc"}, "enter", "finish", "Finish sign-in and close the dialog"},
 
 	// api_key (the API-key entry dialog)
 	{KeybindingGroupAPIKey, "submit", []string{"enter", "ctrl+y"}, "enter", "submit", "Submit the API key"},
