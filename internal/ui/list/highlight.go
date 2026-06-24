@@ -60,14 +60,59 @@ func HighlightBuffer(content string, area image.Rectangle, startLine, startCol, 
 		return nil
 	}
 
+	buf := drawBuffer(content, area)
+	applyHighlightSpan(buf, area, startLine, startCol, endLine, endCol, highlighter)
+	return buf
+}
+
+// HighlightSpan is one region to highlight, with its own highlighter, as
+// passed to [HighlightRanges].
+type HighlightSpan struct {
+	StartLine, StartCol, EndLine, EndCol int
+	Highlighter                          Highlighter
+}
+
+// HighlightRanges highlights several regions of content in a single pass.
+// Each span is drawn over the same buffer in order, so later spans win on
+// overlapping cells (e.g. an active match drawn on top of a dim one).
+// Spans with a negative StartLine/StartCol are skipped. When no span
+// applies, the original content is returned unchanged.
+func HighlightRanges(content string, area image.Rectangle, spans []HighlightSpan) string {
+	buf := drawBuffer(stringext.NormalizeSpace(content), area)
+	applied := false
+	for _, sp := range spans {
+		if sp.StartLine < 0 || sp.StartCol < 0 {
+			continue
+		}
+		applyHighlightSpan(buf, area, sp.StartLine, sp.StartCol, sp.EndLine, sp.EndCol, sp.Highlighter)
+		applied = true
+	}
+	if !applied {
+		return content
+	}
+	return buf.Render()
+}
+
+// drawBuffer renders content into a fresh screen buffer sized to area.
+func drawBuffer(content string, area image.Rectangle) *uv.ScreenBuffer {
+	buf := uv.NewScreenBuffer(area.Dx(), area.Dy())
+	uv.NewStyledString(content).Draw(&buf, area)
+	return &buf
+}
+
+// applyHighlightSpan applies highlighter to the cells of buf within the
+// given range. -1 for endLine/endCol means "to the end of content". Only
+// cells that hold content (not trailing blanks) are styled, matching the
+// single-range behavior. Out-of-range starts are a no-op.
+func applyHighlightSpan(buf *uv.ScreenBuffer, area image.Rectangle, startLine, startCol, endLine, endCol int, highlighter Highlighter) {
+	if startLine < 0 || startCol < 0 {
+		return
+	}
 	if highlighter == nil {
 		highlighter = DefaultHighlighter
 	}
 
 	width, height := area.Dx(), area.Dy()
-	buf := uv.NewScreenBuffer(width, height)
-	styled := uv.NewStyledString(content)
-	styled.Draw(&buf, area)
 
 	// Treat -1 as "end of content"
 	if endLine < 0 {
@@ -130,8 +175,6 @@ func HighlightBuffer(content string, area image.Rectangle, startLine, startCol, 
 			}
 		}
 	}
-
-	return &buf
 }
 
 // ToHighlighter converts a [lipgloss.Style] to a [Highlighter].

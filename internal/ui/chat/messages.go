@@ -74,6 +74,30 @@ type SendMsg struct {
 	Attachments []message.Attachment
 }
 
+// SearchRange is one search-match occurrence within an item's content.
+// Columns include the MessageLeftPaddingTotal offset (the convention
+// SetHighlight expects — the item subtracts it internally).
+type SearchRange struct {
+	Line     int
+	StartCol int
+	EndCol   int
+}
+
+// SearchHighlightable is implemented by items that can show every search
+// match at once (dim), in addition to the single bright highlight from
+// [list.Highlightable] used for the active match / mouse selection.
+type SearchHighlightable interface {
+	SetSearchMatches(ranges []SearchRange)
+}
+
+// matchRange is a stored search-match span, content-relative (the left
+// inset already subtracted), ready to feed to the highlighter.
+type matchRange struct {
+	line     int
+	startCol int
+	endCol   int
+}
+
 type highlightableMessageItem struct {
 	// version is the parent item's version counter. SetHighlight
 	// bumps it on every observable change so the F6 list memo and
@@ -86,22 +110,51 @@ type highlightableMessageItem struct {
 	endLine     int
 	endCol      int
 	highlighter list.Highlighter
+
+	// matches holds every search hit in this item (drawn dim); the
+	// active match is drawn bright on top via the single range above.
+	matches          []matchRange
+	matchHighlighter list.Highlighter
 }
 
-var _ list.Highlightable = (*highlightableMessageItem)(nil)
+var (
+	_ list.Highlightable  = (*highlightableMessageItem)(nil)
+	_ SearchHighlightable = (*highlightableMessageItem)(nil)
+)
 
-// isHighlighted returns true if the item has a highlight range set.
+// isHighlighted returns true if the item has any highlight to draw: the
+// single (active match / mouse selection) range OR one or more dim search
+// matches. Both must count, because Render uses !isHighlighted() to decide
+// whether it may serve the prefix cache (which only ever stores the
+// un-highlighted render) — if the dim matches didn't count, every
+// non-active match block would render from cache without its highlights.
 func (h *highlightableMessageItem) isHighlighted() bool {
-	return h.startLine != -1 || h.endLine != -1
+	return h.startLine != -1 || h.endLine != -1 || len(h.matches) > 0
 }
 
-// renderHighlighted highlights the content if necessary.
+// renderHighlighted highlights the content if necessary: every search
+// match dim, then the single active range bright on top.
 func (h *highlightableMessageItem) renderHighlighted(content string, width, height int) string {
 	if !h.isHighlighted() {
 		return content
 	}
 	area := image.Rect(0, 0, width, height)
-	return list.Highlight(content, area, h.startLine, h.startCol, h.endLine, h.endCol, h.highlighter)
+	spans := make([]list.HighlightSpan, 0, len(h.matches)+1)
+	for _, m := range h.matches {
+		spans = append(spans, list.HighlightSpan{
+			StartLine: m.line, StartCol: m.startCol,
+			EndLine: m.line, EndCol: m.endCol,
+			Highlighter: h.matchHighlighter,
+		})
+	}
+	if h.isHighlighted() {
+		spans = append(spans, list.HighlightSpan{
+			StartLine: h.startLine, StartCol: h.startCol,
+			EndLine: h.endLine, EndCol: h.endCol,
+			Highlighter: h.highlighter,
+		})
+	}
+	return list.HighlightRanges(content, area, spans)
 }
 
 // SetHighlight implements list.Highlightable.
@@ -131,14 +184,52 @@ func (h *highlightableMessageItem) Highlight() (startLine int, startCol int, end
 	return h.startLine, h.startCol, h.endLine, h.endCol
 }
 
+// SetSearchMatches implements SearchHighlightable. Columns arrive with the
+// left inset (border + padding) included, like SetHighlight, so subtract
+// it here since we highlight the content only.
+func (h *highlightableMessageItem) SetSearchMatches(ranges []SearchRange) {
+	offset := MessageLeftPaddingTotal
+	next := make([]matchRange, 0, len(ranges))
+	for _, r := range ranges {
+		next = append(next, matchRange{
+			line:     r.Line,
+			startCol: max(0, r.StartCol-offset),
+			endCol:   max(0, r.EndCol-offset),
+		})
+	}
+	if matchRangesEqual(h.matches, next) {
+		return
+	}
+	h.matches = next
+	if h.version != nil {
+		h.version.Bump()
+	}
+}
+
+// matchRangesEqual reports whether two match-range slices are identical,
+// so SetSearchMatches only bumps the version (and forces a re-render) on
+// an actual change.
+func matchRangesEqual(a, b []matchRange) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func defaultHighlighter(sty *styles.Styles, v *list.Versioned) *highlightableMessageItem {
 	return &highlightableMessageItem{
-		version:     v,
-		startLine:   -1,
-		startCol:    -1,
-		endLine:     -1,
-		endCol:      -1,
-		highlighter: list.ToHighlighter(sty.TextSelection),
+		version:          v,
+		startLine:        -1,
+		startCol:         -1,
+		endLine:          -1,
+		endCol:           -1,
+		highlighter:      list.ToHighlighter(sty.TextSelection),
+		matchHighlighter: list.ToHighlighter(sty.SearchMatch),
 	}
 }
 

@@ -869,6 +869,10 @@ func quickStyle(o quickStyleOpts) Styles {
 	// Text selection.
 	s.TextSelection = lipgloss.NewStyle().Foreground(o.onPrimary).Background(o.primary)
 
+	// Non-active search matches: a subtle neutral background so every hit
+	// is visible at once while the active match (TextSelection) still pops.
+	s.SearchMatch = lipgloss.NewStyle().Foreground(o.fgBase).Background(o.bgMostVisible)
+
 	// Dialog styles
 	s.Dialog.Title = base.Padding(0, 1).Foreground(o.primary)
 	s.Dialog.TitleText = base.Foreground(o.primary)

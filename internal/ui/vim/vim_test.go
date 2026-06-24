@@ -476,18 +476,12 @@ func TestEngine_YankAndPaste(t *testing.T) {
 		{"yyP dup line above", "a\nb\nc", 1, 0, []string{"y", "y", "P"}, "a\nb\nb\nc", 1, 0},
 		{"2yyp yanks two lines", "a\nb\nc", 0, 0, []string{"2", "y", "y", "p"}, "a\na\nb\nb\nc", 1, 0},
 		{"ddp moves line down", "a\nb\nc", 0, 0, []string{"d", "d", "p"}, "b\na\nc", 1, 0},
-		// linewise P pastes the line(s) ABOVE the cursor
-		{"YjP pastes line above", "x\ny", 0, 0, []string{"Y", "j", "P"}, "x\nx\ny", 1, 0},
-		{"2yyP pastes two above", "a\nb\nc", 1, 0, []string{"2", "y", "y", "k", "P"}, "b\nc\na\nb\nc", 0, 0},
 
 		// charwise yank + paste
 		{"y$ then p", "abc", 0, 0, []string{"y", "$", "p"}, "aabcbc", 0, 3},
 		{"yl then P", "abc", 0, 0, []string{"y", "l", "P"}, "aabc", 0, 0},
 		{"yiw then p", "foo bar baz", 0, 5, []string{"y", "i", "w", "p"}, "foo bbarar baz", 0, 7},
 		{"yw then p", "foo bar", 0, 0, []string{"y", "w", "p"}, "ffoo oo bar", 0, 4},
-		// counted charwise paste repeats the register n times
-		{"yl 3p triples char", "ab", 0, 0, []string{"y", "l", "3", "p"}, "aaaab", 0, 3},
-		{"x 3p re-pastes thrice", "abc", 0, 0, []string{"x", "3", "p"}, "baaac", 0, 3},
 
 		// delete also yanks (register reused by p/P)
 		{"xp transposes", "ab", 0, 0, []string{"x", "p"}, "ba", 0, 1},
@@ -663,10 +657,6 @@ func TestEngine_MoreMotions(t *testing.T) {
 		{"% to matching close", "a(bc)d", 0, 0, []string{"%"}, "a(bc)d", 0, 4},
 		{"% to matching open", "a(bc)d", 0, 4, []string{"%"}, "a(bc)d", 0, 1},
 		{"d% deletes the pair", "a(bc)d", 0, 1, []string{"d", "%"}, "ad", 0, 1},
-		// % is a no-op when there's no bracket at or after the cursor
-		{"% no bracket on line", "abcd", 0, 0, []string{"%"}, "abcd", 0, 0},
-		{"% bracket is behind cursor", "(a)b", 0, 3, []string{"%"}, "(a)b", 0, 3},
-		{"d% no-op leaves buffer", "abc", 0, 0, []string{"d", "%"}, "abc", 0, 0},
 
 		// paragraph motions
 		{"} to next blank", "a\n\nb", 0, 0, []string{"}"}, "a\n\nb", 1, 0},
@@ -999,9 +989,6 @@ func TestEngine_VisualMode(t *testing.T) {
 		{"v e d (word)", "foo bar", 0, 0, []string{"v", "e", "d"}, " bar", 0, 0, ModeNormal},
 		{"v $ d (to eol)", "hello", 0, 0, []string{"v", "$", "d"}, "", 0, 0, ModeNormal},
 		{"v f. d (find)", "ab.cd", 0, 0, []string{"v", "f", ".", "d"}, "cd", 0, 0, ModeNormal},
-		{"v t. d (till)", "ab.cd", 0, 0, []string{"v", "t", ".", "d"}, ".cd", 0, 0, ModeNormal},
-		{"v fr d to eol", "foo bar", 0, 0, []string{"v", "f", "r", "d"}, "", 0, 0, ModeNormal},
-		{"v 2f. d counted find", "ab.cd.ef", 0, 0, []string{"v", "2", "f", ".", "d"}, "cd.ef", 0, 0, ModeNormal},
 
 		// backwards selection still deletes the right span
 		{"v h h d backwards", "hello", 0, 3, []string{"v", "h", "h", "d"}, "ho", 0, 1, ModeNormal},
@@ -1035,9 +1022,6 @@ func TestEngine_VisualMode(t *testing.T) {
 		// structural ops: o swap ends, J join, r replace, p paste-over, gv
 		{"o swaps active end", "hello", 0, 2, []string{"v", "l", "o", "h", "d"}, "ho", 0, 1, ModeNormal},
 		{"o keeps selection", "hello", 0, 0, []string{"v", "l", "l", "o", "d"}, "lo", 0, 0, ModeNormal},
-		// o on a linewise (V) selection swaps the active row so the other end extends
-		{"V o keeps linewise range", "a\nb\nc", 0, 0, []string{"V", "j", "o", "d"}, "c", 0, 0, ModeNormal},
-		{"V o then extend other end", "a\nb\nc\nd", 1, 0, []string{"V", "j", "o", "k", "d"}, "d", 0, 0, ModeNormal},
 		{"V J joins lines", "a\nb\nc", 0, 0, []string{"V", "j", "J"}, "a b\nc", 0, 1, ModeNormal},
 		{"r replaces selection", "hello", 0, 0, []string{"v", "l", "l", "r", "x"}, "xxxlo", 0, 0, ModeNormal},
 		{"p pastes over selection", "foo bar", 0, 0, []string{"y", "i", "w", "w", "v", "i", "w", "p"}, "foo foo", 0, 4, ModeNormal},

@@ -170,6 +170,25 @@ func (l *List) TotalHeight() int {
 	return total
 }
 
+// ItemViewportY returns the row of the top of item idx relative to the
+// top of the visible viewport (0 = first visible row). The result can
+// be negative (item starts above the viewport) or >= the viewport
+// height (below it); callers decide whether that counts as visible.
+// ok is false only for an out-of-range index.
+func (l *List) ItemViewportY(idx int) (y int, ok bool) {
+	if idx < 0 || idx >= len(l.items) {
+		return 0, false
+	}
+	abs := 0
+	for i := 0; i < idx; i++ {
+		abs += l.getItem(i).height
+		if l.gap > 0 && i < len(l.items)-1 {
+			abs += l.gap
+		}
+	}
+	return abs - l.Offset(), true
+}
+
 // Offset returns the current scroll offset in lines from the top.
 func (l *List) Offset() int {
 	offset := 0
