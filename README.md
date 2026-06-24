@@ -649,6 +649,55 @@ it creates. You can customize this behavior with the `attribution` option:
 - `generated_with`: When true (default), adds `💘 Generated with Crush` line to
   commit messages and PR descriptions
 
+### Vim Mode
+
+The message composer supports an optional vim-style modal editing mode. Enable
+it with `options.tui.vim_mode`:
+
+```json
+{
+  "$schema": "https://charm.land/crush.json",
+  "options": {
+    "tui": {
+      "vim_mode": true
+    }
+  }
+}
+```
+
+When enabled, the composer starts in NORMAL mode (block cursor) and supports the
+common motions, operators, and text objects: `h/j/k/l`, `w/b/e` (and `W/B/E`),
+`f/t`, `%`, `{`/`}`, `g_`, `ge`/`gE`; the `d`/`c`/`y` operators with motions and
+text objects (`diw`, `ci"`, `dap`, …); visual mode (`v`/`V` with `o`, `J`, `r`,
+`p`, `gv`); case operators (`gu`/`gU`/`g~`); the dot operator (`.`); and
+undo/redo (`u` / `ctrl+r`). The current mode (NORMAL/INSERT/VISUAL) is shown in
+the editor footer, and you can toggle vim mode at runtime from the command
+palette ("Toggle Vim Mode").
+
+> [!NOTE]
+> With vim mode on, `ctrl+r` is repurposed for redo.
+
+The `>>` / `<<` shift operators (and visual-mode `>` / `<`) are configurable via
+`options.tui.vim_indent`:
+
+```json
+{
+  "options": {
+    "tui": {
+      "vim_mode": true,
+      "vim_indent": { "style": "spaces", "width": 2 }
+    }
+  }
+}
+```
+
+- `style`: `spaces` (default) inserts `width` spaces; `tabs` inserts a tab and
+  treats it as `width` columns when dedenting.
+- `width`: columns per shift (default `2`).
+
+The composer cursor blink is controlled by `options.tui.cursor_blink` (default
+`true`; set `false` for a steady cursor).
+
 ### Custom Providers
 
 Crush supports custom provider configurations for both OpenAI-compatible and
