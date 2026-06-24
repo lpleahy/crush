@@ -60,9 +60,30 @@ type Chat struct {
 	// Pending single click action (delayed to detect double-click)
 	pendingClickID int // Incremented on each click to invalidate old pending clicks
 
+	// Search-match highlight. searchHiItem is the item index whose
+	// matched substring is highlighted (-1 = none). Columns include the
+	// MessageLeftPaddingTotal offset, same convention as the mouse
+	// selection fields, since applyHighlightRange feeds them to
+	// SetHighlight which subtracts the offset. Applied by
+	// applyHighlightRange only when no mouse selection is active.
+	searchHiItem     int
+	searchHiLine     int
+	searchHiStartCol int
+	searchHiEndCol   int
+
+	// searchMatchRanges holds every search hit grouped by item index, so
+	// all matches can be shown dim at once (the active one, above, is
+	// drawn bright on top). nil when no search is active. Applied by
+	// applyHighlightRange alongside the single active highlight.
+	searchMatchRanges map[int][]chat.SearchRange
+
 	// follow is a flag to indicate whether the view should auto-scroll to
 	// bottom on new messages.
 	follow bool
+
+	// copy is the active native copy-mode session (vim-style selection over
+	// the output), or nil.
+	copy *copyMode
 
 	// drawCache memoizes the decoded form of the last list.Render output so
 	// repeat frames with byte-identical content skip the per-cell ANSI
@@ -106,6 +127,7 @@ func NewChat(com *common.Common) *Chat {
 	c.list = l
 	c.mouseDownItem = -1
 	c.mouseDragItem = -1
+	c.searchHiItem = -1
 	return c
 }
 
@@ -122,6 +144,10 @@ func (m *Chat) Height() int {
 // rendered string and the screen's width method; area / scroll changes do not
 // invalidate it.
 func (m *Chat) Draw(scr uv.Screen, area uv.Rectangle) {
+	if m.copy != nil && m.copy.active {
+		uv.NewStyledString(m.copy.view(area.Dx(), area.Dy())).Draw(scr, area)
+		return
+	}
 	rendered := m.list.Render()
 	method, ok := scr.WidthMethod().(ansi.Method)
 	if !ok {
@@ -203,6 +229,96 @@ func drawCachedBuffer(scr uv.Screen, area uv.Rectangle, buf uv.ScreenBuffer) {
 	}
 	buf.Draw(scr, area)
 }
+
+// CopyModeActive reports whether native copy mode is engaged.
+func (m *Chat) CopyModeActive() bool { return m.copy != nil && m.copy.active }
+
+// CopyModeCursorPos returns the copy-mode cursor's (col, row) within the chat
+// area (relative to its top-left), for placing the terminal cursor.
+func (m *Chat) CopyModeCursorPos() (col, row int, ok bool) {
+	if !m.CopyModeActive() {
+		return 0, 0, false
+	}
+	c, r := m.copy.cursorScreenPos()
+	return c, r, true
+}
+
+// EnterCopyMode builds a copy-mode session and starts the selection on the
+// block you're on (the selected/highlighted one), centered in view.
+func (m *Chat) EnterCopyMode() { m.enterCopyModeAt(m.list.Selected(), 0, 0) }
+
+// EnterCopyModeAtMatch enters copy mode with the cursor on a search match
+// (the handoff from the chat search bar).
+func (m *Chat) EnterCopyModeAtMatch(mt SearchMatch) {
+	// SearchMatch columns include the gutter offset; the model is gutter-free.
+	m.enterCopyModeAt(mt.ItemIndex, mt.Line, mt.StartCol-chat.MessageLeftPaddingTotal)
+}
+
+// enterCopyModeAt builds the session and positions the cursor at item/line/
+// col (item < 0 → most recent output).
+func (m *Chat) enterCopyModeAt(item, line, col int) {
+	blocks, itemStart := m.buildCopyBlocks()
+	cm := newCopyMode(blocks)
+	cm.selStyle = m.com.Styles.TextSelection
+	cm.cursorStyle = lipgloss.NewStyle().Reverse(true)
+	// The "▌" current-block marker reuses the selection's accent color.
+	cm.borderStyle = lipgloss.NewStyle().Foreground(m.com.Styles.TextSelection.GetBackground())
+	target := len(cm.stripped) - 1
+	if item >= 0 && item < len(itemStart) && itemStart[item] >= 0 {
+		target = itemStart[item] + line
+	}
+	cm.moveToLineCol(target, col)
+	cm.centerOnLine = target // bring the starting block into view on entry
+	m.copy = cm
+}
+
+// buildCopyBlocks gathers each block's gutter-free RawRender and the model
+// line each item begins at (-1 for non-renderable items), matching the line
+// accounting in buildCopyLines (one blank line between blocks).
+func (m *Chat) buildCopyBlocks() (blocks []string, itemStart []int) {
+	// Drop any search highlight first: RawRender bakes it in (renderHighlighted),
+	// so without this the copy view would show stale dim/bright match boxes and
+	// their ANSI would shift the selection overlay.
+	m.ClearSearchHighlight()
+	w := m.list.Width()
+	itemStart = make([]int, m.list.Len())
+	line := 0
+	for i := range m.list.Len() {
+		itemStart[i] = -1
+		item := m.list.ItemAt(i)
+		if sh, ok := item.(chat.SearchHighlightable); ok {
+			sh.SetSearchMatches(nil)
+		}
+		if hi, ok := item.(list.Highlightable); ok {
+			hi.SetHighlight(-1, -1, -1, -1)
+		}
+		rr, ok := item.(list.RawRenderable)
+		if !ok {
+			continue
+		}
+		itemStart[i] = line
+		r := rr.RawRender(w)
+		blocks = append(blocks, r)
+		line += strings.Count(r, "\n") + 1 + 1 // block lines + blank separator
+	}
+	return blocks, itemStart
+}
+
+// HandleCopyModeKey routes a key to copy mode, returning any yanked text (to
+// copy to the OS clipboard) and whether copy mode should now exit.
+func (m *Chat) HandleCopyModeKey(key string) (yanked string, exit bool) {
+	if m.copy == nil {
+		return "", true
+	}
+	yanked, exit = m.copy.handleKey(key)
+	if exit {
+		m.copy = nil
+	}
+	return yanked, exit
+}
+
+// ExitCopyMode leaves copy mode if active.
+func (m *Chat) ExitCopyMode() { m.copy = nil }
 
 // SetSize sets the size of the chat view port.
 func (m *Chat) SetSize(width, height int) {
@@ -836,7 +952,29 @@ func (m *Chat) ClearMouse() {
 
 // applyHighlightRange applies the current highlight range to the chat items.
 func (m *Chat) applyHighlightRange(idx, selectedIdx int, item list.Item) list.Item {
+	// Every search match in this item is shown dim (the active one is
+	// drawn bright by the single-range highlight below). Mouse drags take
+	// precedence over search, so clear matches while selecting.
+	if sh, ok := item.(chat.SearchHighlightable); ok {
+		if m.mouseDownItem < 0 {
+			sh.SetSearchMatches(m.searchMatchRanges[idx])
+		} else {
+			sh.SetSearchMatches(nil)
+		}
+	}
+
 	if hi, ok := item.(list.Highlightable); ok {
+		// A search-match highlight applies only when the user isn't
+		// actively dragging a mouse selection (mouse takes precedence).
+		if m.mouseDownItem < 0 && m.searchHiItem >= 0 {
+			if idx == m.searchHiItem {
+				hi.SetHighlight(m.searchHiLine, m.searchHiStartCol, m.searchHiLine, m.searchHiEndCol)
+			} else {
+				hi.SetHighlight(-1, -1, -1, -1)
+			}
+			return hi.(list.Item)
+		}
+
 		// Apply highlight
 		startItemIdx, startLine, startCol, endItemIdx, endLine, endCol := m.getHighlightRange()
 		sLine, sCol, eLine, eCol := -1, -1, -1, -1

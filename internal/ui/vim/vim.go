@@ -1085,11 +1085,13 @@ func (e *Engine) visualPaste(ta Textarea) {
 		} else {
 			next = append(next, []rune(e.reg.text))
 		}
+		at := len(next)
 		next = append(next, lines[hi+1:]...)
 		if len(next) == 0 {
 			next = [][]rune{{}}
 		}
 		r := clamp(lo, 0, len(next)-1)
+		_ = at
 		writeContent(ta, next, r, firstNonBlank(next[r]))
 		e.mode = ModeNormal
 		return

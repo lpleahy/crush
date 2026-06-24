@@ -98,6 +98,10 @@ type Styles struct {
 	// Text selection
 	TextSelection lipgloss.Style
 
+	// SearchMatch styles non-active chat-search matches (every hit is
+	// shown at once); the active match keeps the louder TextSelection.
+	SearchMatch lipgloss.Style
+
 	// Markdown & Chroma
 	Markdown      ansi.StyleConfig
 	QuietMarkdown ansi.StyleConfig

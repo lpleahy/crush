@@ -24,6 +24,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/catwalk/pkg/catwalk"
 	"charm.land/lipgloss/v2"
@@ -62,7 +63,6 @@ import (
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/ultraviolet/layout"
 	"github.com/charmbracelet/ultraviolet/screen"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/editor"
 	xstrings "github.com/charmbracelet/x/exp/strings"
 )
@@ -202,6 +202,16 @@ type UI struct {
 	focus uiFocusState
 	state uiState
 
+	// search holds in-conversation block search state (the "/" search
+	// over chat blocks). Zero value = inactive.
+	search chatSearchState
+
+	// searchInput is the text field backing the inline search bar (the
+	// vim "/"-style one-line bar shown above the footer while search is
+	// active). It captures the query keystrokes; its Value() is the live
+	// query.
+	searchInput textinput.Model
+
 	keyMap KeyMap
 	keyenh tea.KeyboardEnhancementsMsg
 
@@ -331,6 +341,14 @@ func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
 
 	ch := NewChat(com)
 
+	// Inline chat-search bar input. A vim "/"-style one-line field; the
+	// real terminal cursor is drawn for it (SetVirtualCursor(false)) just
+	// like the editor and the API-key dialog.
+	searchInput := textinput.New()
+	searchInput.SetVirtualCursor(false)
+	searchInput.Prompt = "/"
+	searchInput.SetStyles(com.Styles.TextInput)
+
 	keyMap := DefaultKeyMap()
 
 	// Completions component
@@ -368,6 +386,7 @@ func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
 		dialog:              dialog.NewOverlay(),
 		keyMap:              keyMap,
 		textarea:            ta,
+		searchInput:         searchInput,
 		chat:                ch,
 		header:              header,
 		completions:         comp,
@@ -2020,6 +2039,21 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 		return m.handleDialogMsg(msg)
 	}
 
+	// Native copy mode (vim-style selection over the output) captures all
+	// keys while active.
+	if m.chat.CopyModeActive() {
+		return m.handleCopyModeKey(msg)
+	}
+
+	// When a search bar is open it captures all keys (composer-draft or
+	// conversation-output search).
+	if m.search.active {
+		if m.search.composer {
+			return m.handleComposerSearchKey(msg)
+		}
+		return m.handleChatSearchKey(msg)
+	}
+
 	// In vim insert or visual mode, esc returns to normal mode first — it
 	// must never reach the cancel-agent handler below, so a running task
 	// can't be cancelled straight from insert/visual mode. Once in normal
@@ -2312,7 +2346,36 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 			}
 		case uiFocusMain:
 			switch {
+			case key.Matches(msg, m.keyMap.Chat.CopyMode):
+				// Enter native copy mode in NAVIGATION — the cursor shows on
+				// the block you're on, but no selection starts yet. Press
+				// v/V again to begin selecting where you've moved to (rarely
+				// the block's first character).
+				m.chat.EnterCopyMode()
+			case key.Matches(msg, m.keyMap.Chat.Search):
+				// Open block search over the conversation.
+				m.openChatSearch()
+			case m.search.hasMatches() && key.Matches(msg, m.keyMap.Chat.SearchNext):
+				// n = forward/down the screen (toward newer), N = back/up
+				// (toward older), matching vim's search convention.
+				if cmd := m.chatSearchStep(1); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+			case m.search.hasMatches() && key.Matches(msg, m.keyMap.Chat.SearchPrev):
+				if cmd := m.chatSearchStep(-1); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+			case msg.String() == "enter" && m.search.hasMatches():
+				// Drop into native copy mode at the current match.
+				m.chat.EnterCopyModeAtMatch(m.search.matches[m.search.cur])
+				m.endChatSearch()
+			case m.search.hasMatches() && key.Matches(msg, m.keyMap.Chat.ClearHighlight):
+				// esc dismisses a lingering confirmed-search highlight.
+				m.endChatSearch()
 			case key.Matches(msg, m.keyMap.Tab):
+				// Leaving the conversation for the editor clears any
+				// active search highlight.
+				m.endChatSearch()
 				m.focus = uiFocusEditor
 				cmds = append(cmds, m.textarea.Focus())
 				m.chat.Blur()
@@ -2324,6 +2387,7 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 					cmds = append(cmds, util.ReportWarn("Agent is busy, please wait before starting a new session..."))
 					break
 				}
+				m.endChatSearch()
 				m.focus = uiFocusEditor
 				if cmd := m.newSession(); cmd != nil {
 					cmds = append(cmds, cmd)
@@ -2420,6 +2484,23 @@ func (m *UI) drawHeader(scr uv.Screen, area uv.Rectangle) {
 	)
 }
 
+// drawSearchBar draws the inline chat-search bar: the vim "/"-style text
+// field on the left and the match counter / hints on the right, on a
+// single row docked above the status line.
+func (m *UI) drawSearchBar(scr uv.Screen, area uv.Rectangle) {
+	// Keep the field's width in sync with the counter/hints, which change
+	// as matches are found while typing/iterating.
+	m.searchInput.SetWidth(m.searchInputWidth())
+	field := m.searchInput.View()
+	suffix := m.searchBarSuffix()
+	if suffix != "" {
+		// Reuse the (muted) blurred text-input style for the trailing
+		// counter/hints so they read as secondary to the live query.
+		suffix = m.com.Styles.TextInput.Blurred.Text.Render(suffix)
+	}
+	uv.NewStyledString(field+suffix).Draw(scr, area)
+}
+
 // Draw implements [uv.Drawable] and draws the UI model.
 func (m *UI) Draw(scr uv.Screen, area uv.Rectangle) *tea.Cursor {
 	layout := m.generateLayout(area.Dx(), area.Dy())
@@ -2478,6 +2559,12 @@ func (m *UI) Draw(scr uv.Screen, area uv.Rectangle) *tea.Cursor {
 		}
 	}
 
+	// Draw the inline chat-search bar (vim "/"-style), docked just above
+	// the status line, when search is active.
+	if m.search.active && layout.searchBar.Dy() > 0 {
+		m.drawSearchBar(scr, layout.searchBar)
+	}
+
 	isOnboarding := m.state == uiOnboarding
 
 	// Add status and help layer
@@ -2519,6 +2606,34 @@ func (m *UI) Draw(scr uv.Screen, area uv.Rectangle) *tea.Cursor {
 	// accordingly.
 	if m.dialog.HasDialogs() {
 		return m.dialog.Draw(scr, scr.Bounds())
+	}
+
+	// While the inline search bar is active it owns the cursor.
+	if m.search.active && m.layout.searchBar.Dy() > 0 {
+		if cur := m.searchInput.Cursor(); cur != nil {
+			cur.X += m.layout.searchBar.Min.X
+			cur.Y += m.layout.searchBar.Min.Y
+			// It's a text field: show a blinking bar, not the block shape the
+			// vim composer may have left the terminal cursor in (which renders
+			// as a solid black box over the query).
+			cur.Shape = tea.CursorBar
+			cur.Blink = m.cursorBlinkEnabled()
+			return cur
+		}
+		return nil
+	}
+
+	// Native copy mode draws its own view; place the themed terminal cursor at
+	// the copy-mode cursor (instead of a drawn block) so it matches the
+	// composer cursor.
+	if m.chat.CopyModeActive() {
+		if col, row, ok := m.chat.CopyModeCursorPos(); ok && row >= 0 && row < m.layout.main.Dy() {
+			cur := tea.NewCursor(m.layout.main.Min.X+col, m.layout.main.Min.Y+row)
+			cur.Shape = tea.CursorBlock
+			cur.Blink = m.cursorBlinkEnabled()
+			return cur
+		}
+		return nil
 	}
 
 	switch m.focus {
@@ -2586,15 +2701,32 @@ func (m *UI) View() tea.View {
 	return v
 }
 
+// copyModeHelp is the footer hint shown while native copy mode is active.
+func copyModeHelp() []key.Binding {
+	mk := func(keys, label string) key.Binding {
+		return key.NewBinding(key.WithKeys(keys), key.WithHelp(keys, label))
+	}
+	return []key.Binding{
+		mk("hjkl", "move"),
+		mk("v/V", "select"),
+		mk("y", "copy"),
+		mk("/", "search"),
+		mk("esc", "exit"),
+	}
+}
+
 // ShortHelp implements [help.KeyMap].
 func (m *UI) ShortHelp() []key.Binding {
+	if m.chat.CopyModeActive() {
+		return copyModeHelp()
+	}
 	var binds []key.Binding
 	k := &m.keyMap
 	tab := k.Tab
 	commands := k.Commands
-	if m.focus == uiFocusEditor && m.textarea.Value() == "" {
-		commands.SetHelp("/ or ctrl+p", "commands")
-	}
+	// "/" opens conversation search from an empty composer (the command
+	// palette is on ctrl+p / ctrl+.).
+	showSearch := m.focus == uiFocusEditor && m.textarea.Value() == ""
 
 	switch m.state {
 	case uiInitialize:
@@ -2626,6 +2758,9 @@ func (m *UI) ShortHelp() []key.Binding {
 
 		switch m.focus {
 		case uiFocusEditor:
+			if showSearch {
+				binds = append(binds, k.Editor.Commands)
+			}
 			binds = append(
 				binds,
 				k.Editor.Newline,
@@ -2638,6 +2773,8 @@ func (m *UI) ShortHelp() []key.Binding {
 				k.Chat.PageUp,
 				k.Chat.PageDown,
 				k.Chat.Copy,
+				k.Chat.Search,
+				k.Chat.CopyMode,
 			)
 			if m.pillsExpanded && hasIncompleteTodos(m.session.Todos) && m.promptQueue > 0 {
 				binds = append(binds, k.Chat.PillLeft)
@@ -2673,9 +2810,7 @@ func (m *UI) FullHelp() [][]key.Binding {
 	hasAttachments := len(m.attachments.List()) > 0
 	hasSession := m.hasSession()
 	commands := k.Commands
-	if m.focus == uiFocusEditor && m.textarea.Value() == "" {
-		commands.SetHelp("/ or ctrl+p", "commands")
-	}
+	showSearch := m.focus == uiFocusEditor && m.textarea.Value() == ""
 
 	switch m.state {
 	case uiInitialize:
@@ -2724,9 +2859,16 @@ func (m *UI) FullHelp() [][]key.Binding {
 				k.Editor.MentionFile,
 				k.Editor.OpenEditor,
 			}
+			if showSearch {
+				editorBinds = append(editorBinds, k.Editor.Commands)
+			}
 			if m.currentModelSupportsImages() {
 				editorBinds = append(editorBinds, k.Editor.AddImage, k.Editor.PasteImage)
 			}
+			// Prompt history recall (up/down from an empty composer).
+			histPrev := k.Editor.HistoryPrev
+			histPrev.SetHelp("up/down", "prompt history")
+			editorBinds = append(editorBinds, histPrev)
 			binds = append(binds, editorBinds)
 			if hasAttachments {
 				binds = append(
@@ -2756,6 +2898,13 @@ func (m *UI) FullHelp() [][]key.Binding {
 				[]key.Binding{
 					k.Chat.Copy,
 					k.Chat.ClearHighlight,
+					k.Chat.Expand,
+				},
+				[]key.Binding{
+					k.Chat.Search,
+					k.Chat.SearchNext,
+					k.Chat.SearchPrev,
+					k.Chat.CopyMode,
 				},
 			)
 			if m.pillsExpanded && hasIncompleteTodos(m.session.Todos) && m.promptQueue > 0 {
@@ -2903,6 +3052,7 @@ func (m *UI) updateSize() {
 	m.chat.SetSize(m.layout.main.Dx(), m.layout.main.Dy())
 	m.textarea.MaxHeight = TextareaMaxHeight
 	m.textarea.SetWidth(m.layout.editor.Dx())
+	m.searchInput.SetWidth(m.searchInputWidth())
 	m.renderPills()
 
 	// Handle different app states
@@ -2957,6 +3107,21 @@ func (m *UI) generateLayout(w, h int) uiLayout {
 	uiLayout := uiLayout{
 		area:   area,
 		status: helpRect,
+	}
+
+	// When the inline chat-search bar is active, carve one row off the
+	// bottom of the app area for it, docked just above the status line.
+	// Everything below (main/editor heights) is computed from the reduced
+	// appRect, so the layout only shrinks vertically by one row; the
+	// horizontal origin is unchanged (so the native copy-mode handoff math,
+	// which reads layout.main.Min, still positions correctly).
+	if m.search.active {
+		var searchBarRect image.Rectangle
+		layout.Vertical(
+			layout.Len(appRect.Dy()-1),
+			layout.Fill(1),
+		).Split(appRect).Assign(&appRect, &searchBarRect)
+		uiLayout.searchBar = searchBarRect
 	}
 
 	// Handle different app states
@@ -3126,6 +3291,11 @@ type uiLayout struct {
 
 	// status is the area for the status view.
 	status uv.Rectangle
+
+	// searchBar is the one-row inline chat-search bar, docked just above
+	// the status line. It is only carved out (non-empty) while
+	// m.search.active.
+	searchBar uv.Rectangle
 
 	// session details is the area for the session details overlay in compact mode.
 	sessionDetails uv.Rectangle
@@ -3446,29 +3616,41 @@ func (m *UI) renderEditorView(width int) string {
 	if m.vim != nil && m.vim.Visual() {
 		taView = m.overlayVisualSelection(taView, width)
 	}
+	if m.search.active && m.search.composer && m.search.hasMatches() {
+		taView = m.overlayComposerMatch(taView, width)
+	}
 	return strings.Join([]string{
 		attachmentsView,
 		taView,
-		m.vimModeIndicator(), // margin at bottom of editor, doubles as vim mode line
+		"", // margin at bottom of editor
 	}, "\n")
 }
 
-// vimModeIndicator renders a small, unobtrusive vim mode line (e.g.
-// "-- INSERT --") aligned under the prompt gutter. It returns "" when vim
-// mode is off or in normal mode, so the bottom editor margin is preserved.
-func (m *UI) vimModeIndicator() string {
-	if m.vim == nil {
-		return ""
+// overlayComposerMatch highlights the current composer-search match on the
+// rendered draft (same overlay as the visual selection), so "/" search shows
+// where it landed.
+func (m *UI) overlayComposerMatch(taView string, width int) string {
+	height := strings.Count(taView, "\n") + 1
+	if width <= 0 || height <= 0 {
+		return taView
 	}
-	mode := m.vim.Mode()
-	if mode == vim.ModeNormal {
-		return ""
+	mt := m.search.cmatches[m.search.ccur]
+	qlen := len([]rune(strings.TrimSpace(m.searchQuery())))
+	lines := strings.Split(m.textarea.Value(), "\n")
+	if qlen == 0 || mt.line < 0 || mt.line >= len(lines) {
+		return taView
 	}
-	label := fmt.Sprintf("-- %s --", mode.String())
-	// Reuse the muted normal-prompt style so the indicator stays themed and
-	// quiet; indent under the prompt gutter ("  > " width).
-	style := m.com.Styles.Editor.PromptNormalBlurred
-	return strings.Repeat(" ", editorPromptWidth) + style.Render(label)
+	vr := mt.line - m.textarea.ScrollYOffset()
+	if vr < 0 || vr >= height {
+		return taView
+	}
+	row := []rune(lines[mt.line])
+	c0 := max(0, min(mt.col, len(row)))
+	c1 := max(0, min(mt.col+qlen, len(row)))
+	start := editorPromptWidth + lipgloss.Width(string(row[:c0]))
+	end := editorPromptWidth + lipgloss.Width(string(row[:c1]))
+	area := image.Rect(0, 0, width, height)
+	return list.Highlight(taView, area, vr, start, vr, end, list.ToHighlighter(m.com.Styles.TextSelection))
 }
 
 // newVimEngine builds a vim engine and applies the composer's indent
@@ -3491,19 +3673,13 @@ const editorPromptWidth = 4
 // assumes one logical line renders to one visual row, so long soft-wrapped
 // lines may highlight imprecisely (the overlay only restyles cells, so a
 // mismatch is cosmetic — never corrupting text).
-//
-// VisualRowSpans reports RUNE columns, but list.Highlight indexes by DISPLAY
-// cell, so each span's columns are mapped to display columns (via
-// ansi.StringWidth on the rune prefix) before highlighting; this keeps the
-// overlay aligned over wide runes (CJK/emoji) and tabs.
 func (m *UI) overlayVisualSelection(taView string, width int) string {
 	height := strings.Count(taView, "\n") + 1
 	if width <= 0 || height <= 0 {
 		return taView
 	}
 
-	lines := strings.Split(m.textarea.Value(), "\n")
-	lineLen := logicalLineLengths(lines)
+	lineLen := logicalLineLengths(m.textarea.Value())
 	spans := m.vim.VisualRowSpans(m.textarea.Line(), m.textarea.Column(), lineLen)
 	scroll := m.textarea.ScrollYOffset()
 	area := image.Rect(0, 0, width, height)
@@ -3515,38 +3691,21 @@ func (m *UI) overlayVisualSelection(taView string, width int) string {
 		if vr < 0 || vr >= height {
 			continue
 		}
-		var line string
-		if sp.Row >= 0 && sp.Row < len(lines) {
-			line = lines[sp.Row]
-		}
-		// Map rune columns to display columns, then add the prompt offset
-		// (which is all single-width ASCII, so its rune and display widths
-		// match). Keep the range half-open ([start, end)).
-		start := displayCol(line, sp.StartCol) + editorPromptWidth
-		end := displayCol(line, sp.EndCol) + editorPromptWidth
+		// Columns are logical; add the prompt offset and keep the range
+		// half-open ([start, end)) so only text cells are highlighted.
+		start := sp.StartCol + editorPromptWidth
+		end := sp.EndCol + editorPromptWidth
 		out = list.Highlight(out, area, vr, start, vr, end, hl)
 	}
 	return out
 }
 
-// displayCol returns the display-cell width of the first runeCol runes of
-// line, i.e. it maps a rune column index to the display column where that
-// rune begins. Wide runes (CJK/emoji) and tabs occupy more than one cell.
-func displayCol(line string, runeCol int) int {
-	runes := []rune(line)
-	if runeCol > len(runes) {
-		runeCol = len(runes)
-	}
-	if runeCol <= 0 {
-		return 0
-	}
-	return ansi.StringWidth(string(runes[:runeCol]))
-}
-
-// logicalLineLengths returns the rune length of each logical line.
-func logicalLineLengths(lines []string) []int {
-	lens := make([]int, len(lines))
-	for i, p := range lines {
+// logicalLineLengths returns the rune length of each logical (newline-split)
+// line in s.
+func logicalLineLengths(s string) []int {
+	parts := strings.Split(s, "\n")
+	lens := make([]int, len(parts))
+	for i, p := range parts {
 		lens[i] = len([]rune(p))
 	}
 	return lens

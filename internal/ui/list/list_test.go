@@ -386,6 +386,123 @@ func TestList_SetItems_AllNewDropsEveryEntry(t *testing.T) {
 	require.Equal(t, 2, c.renderHits, "previously-dropped item must re-render")
 }
 
+// TestList_ItemViewportY covers the cumulative-height-minus-offset math
+// of ItemViewportY: the row of the top of item idx relative to the top
+// of the visible viewport. It exercises a zero offset, a non-zero scroll
+// offset (which can make the result negative for items above the
+// viewport), gaps that add to the cumulative height, and the
+// out-of-range guard.
+func TestList_ItemViewportY(t *testing.T) {
+	t.Parallel()
+
+	t.Run("zero offset, no gap: cumulative heights", func(t *testing.T) {
+		t.Parallel()
+
+		// Heights 3, 5, 2. Tops at 0, 3, 8 with offset 0.
+		l := NewList(
+			newMultiLineItem("a", 3),
+			newMultiLineItem("b", 5),
+			newMultiLineItem("c", 2),
+		)
+		l.SetSize(40, 100)
+		l.SetGap(0)
+		// Force the cache to populate heights without scrolling away.
+		_ = l.Render()
+
+		for idx, want := range []int{0, 3, 8} {
+			y, ok := l.ItemViewportY(idx)
+			require.True(t, ok, "idx %d should be in range", idx)
+			require.Equalf(t, want, y, "ItemViewportY(%d)", idx)
+		}
+	})
+
+	t.Run("zero offset, with gap: gap adds between items", func(t *testing.T) {
+		t.Parallel()
+
+		// Heights 3, 5, 2 with gap 1. Tops at 0, 3+1=4, 4+5+1=10.
+		l := NewList(
+			newMultiLineItem("a", 3),
+			newMultiLineItem("b", 5),
+			newMultiLineItem("c", 2),
+		)
+		l.SetSize(40, 100)
+		l.SetGap(1)
+		_ = l.Render()
+
+		for idx, want := range []int{0, 4, 10} {
+			y, ok := l.ItemViewportY(idx)
+			require.True(t, ok)
+			require.Equalf(t, want, y, "ItemViewportY(%d) with gap", idx)
+		}
+	})
+
+	t.Run("non-zero offset shifts every row up", func(t *testing.T) {
+		t.Parallel()
+
+		// Heights 3, 5, 2, no gap. Scroll down so the second item is the
+		// top of the viewport (offsetIdx=1 => Offset()==3). Item tops
+		// become -3, 0, 5: the first item is now above the viewport
+		// (negative), the second is at the top, the third is below.
+		l := NewList(
+			newMultiLineItem("a", 3),
+			newMultiLineItem("b", 5),
+			newMultiLineItem("c", 2),
+		)
+		l.SetSize(40, 6)
+		l.SetGap(0)
+		l.offsetIdx = 1
+		l.offsetLine = 0
+		_ = l.Render()
+
+		require.Equal(t, 3, l.Offset(), "offsetIdx=1 over a height-3 first item")
+		for idx, want := range []int{-3, 0, 5} {
+			y, ok := l.ItemViewportY(idx)
+			require.True(t, ok)
+			require.Equalf(t, want, y, "ItemViewportY(%d) at offset 3", idx)
+		}
+	})
+
+	t.Run("partial line offset subtracts too", func(t *testing.T) {
+		t.Parallel()
+
+		// Scroll two lines into the first item (offsetLine=2 =>
+		// Offset()==2). Item tops 0,4 become -2, 2 (gap 1).
+		l := NewList(
+			newMultiLineItem("a", 4),
+			newMultiLineItem("b", 4),
+		)
+		l.SetSize(40, 4)
+		l.SetGap(1)
+		l.offsetIdx = 0
+		l.offsetLine = 2
+		_ = l.Render()
+
+		require.Equal(t, 2, l.Offset())
+		y0, ok0 := l.ItemViewportY(0)
+		require.True(t, ok0)
+		require.Equal(t, -2, y0)
+		y1, ok1 := l.ItemViewportY(1)
+		require.True(t, ok1)
+		require.Equal(t, 3, y1) // top 5 (height4 + gap1) minus offset 2
+	})
+
+	t.Run("out-of-range index returns ok=false", func(t *testing.T) {
+		t.Parallel()
+
+		l := NewList(newMultiLineItem("a", 3))
+		l.SetSize(40, 10)
+		_ = l.Render()
+
+		y, ok := l.ItemViewportY(-1)
+		require.False(t, ok, "negative index is out of range")
+		require.Equal(t, 0, y)
+
+		y, ok = l.ItemViewportY(1) // len == 1, so index 1 is past the end
+		require.False(t, ok, "index past the end is out of range")
+		require.Equal(t, 0, y)
+	})
+}
+
 // TestVersioned_BumpMonotonic covers the basic Versioned contract:
 // Version() starts at zero and Bump() advances it monotonically.
 func TestVersioned_BumpMonotonic(t *testing.T) {
