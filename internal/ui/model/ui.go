@@ -3733,9 +3733,7 @@ func (m *UI) configuredThemeForProvider(cfg *config.Config, providerID string) s
 	var themes config.Themes
 	if cfg != nil {
 		themes = cfg.Themes
-		if cfg.Options != nil && cfg.Options.TUI != nil {
-			themeName = cfg.Options.TUI.Theme
-		}
+		themeName = cfg.ThemeName()
 	}
 	s := styles.Theme(themeName, providerID, themes)
 	if m.isTransparent {

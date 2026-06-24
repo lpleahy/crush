@@ -446,9 +446,7 @@ func outputSessionHuman(ctx context.Context, cfg *config.ConfigStore, sess sessi
 		crushConfig := cfg.Config()
 		providerID = crushConfig.Models[config.SelectedModelTypeLarge].Provider
 		themes = crushConfig.Themes
-		if crushConfig.Options != nil && crushConfig.Options.TUI != nil {
-			themeName = crushConfig.Options.TUI.Theme
-		}
+		themeName = crushConfig.ThemeName()
 	}
 	styles := styles.Theme(themeName, providerID, themes)
 	toolResults := chat.BuildToolResultMap(msgs)

@@ -45,10 +45,8 @@ func DefaultCommon(ws workspace.Workspace) *Common {
 	if ws != nil {
 		if cfg := ws.Config(); cfg != nil {
 			themes = cfg.Themes
-			if cfg.Options != nil && cfg.Options.TUI != nil {
-				themeName = cfg.Options.TUI.Theme
-				transparent = cfg.Options.TUI.Transparent != nil && *cfg.Options.TUI.Transparent
-			}
+			themeName = cfg.ThemeName()
+			transparent = cfg.Transparent()
 		}
 	}
 	s := styles.Theme(themeName, providerID, themes)
