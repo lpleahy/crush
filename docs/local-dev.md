@@ -48,3 +48,9 @@ auto-update.
 
 Once the catwalk PR lands and `catwalk.charm.land` knows about the new
 provider, the env var is no longer needed.
+
+## Keeping the forks current
+
+Use `docs/fork-maintenance.md` for the general process to rebase the Catwalk
+and Crush forks on top of Charm upstream. Rebase Catwalk first, then Crush, so
+Crush builds and tests see the provider metadata that the fork actually uses.
