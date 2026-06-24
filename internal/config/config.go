@@ -646,6 +646,21 @@ type Config struct {
 	Agents map[string]Agent `json:"-"`
 }
 
+// ThemeName returns the configured TUI theme name, or "" when no theme is set
+// (in which case styles.Theme falls back to the provider-aware default).
+func (c *Config) ThemeName() string {
+	if c != nil && c.Options != nil && c.Options.TUI != nil {
+		return c.Options.TUI.Theme
+	}
+	return ""
+}
+
+// Transparent reports whether the TUI should use a transparent background.
+func (c *Config) Transparent() bool {
+	return c != nil && c.Options != nil && c.Options.TUI != nil &&
+		c.Options.TUI.Transparent != nil && *c.Options.TUI.Transparent
+}
+
 func (c *Config) EnabledProviders() []ProviderConfig {
 	var enabled []ProviderConfig
 	for p := range c.Providers.Seq() {
