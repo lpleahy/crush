@@ -51,15 +51,18 @@ import (
 	"github.com/charmbracelet/crush/internal/ui/completions"
 	"github.com/charmbracelet/crush/internal/ui/dialog"
 	fimage "github.com/charmbracelet/crush/internal/ui/image"
+	"github.com/charmbracelet/crush/internal/ui/list"
 	"github.com/charmbracelet/crush/internal/ui/logo"
 	"github.com/charmbracelet/crush/internal/ui/notification"
 	"github.com/charmbracelet/crush/internal/ui/styles"
 	"github.com/charmbracelet/crush/internal/ui/util"
+	"github.com/charmbracelet/crush/internal/ui/vim"
 	"github.com/charmbracelet/crush/internal/version"
 	"github.com/charmbracelet/crush/internal/workspace"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/ultraviolet/layout"
 	"github.com/charmbracelet/ultraviolet/screen"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/editor"
 	xstrings "github.com/charmbracelet/x/exp/strings"
 )
@@ -236,6 +239,7 @@ type UI struct {
 
 	// Editor components
 	textarea textarea.Model
+	vim      *vim.Engine // modal editing; nil when vim mode is off
 
 	// Attachment list
 	attachments *attachments.Attachments
@@ -387,6 +391,11 @@ func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
 
 	// Initialize compact mode from config
 	ui.forceCompactMode = com.Config().Options.TUI.CompactMode
+
+	// Enable vim modal editing if configured (the engine starts in normal mode).
+	if com.Config().Options.TUI.VimMode {
+		ui.vim = newVimEngine(com.Config())
+	}
 
 	// set onboarding state defaults
 	ui.onboarding.yesInitializeSelected = true
@@ -1515,6 +1524,19 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 		m.com.Workspace.PermissionSetSkipRequests(yolo)
 		m.setEditorPrompt(yolo)
 		m.dialog.CloseDialog(dialog.CommandsID)
+	case dialog.ActionToggleVimMode:
+		// Toggle modal editing live. Enabling starts the engine in normal
+		// mode (block cursor); disabling hands the composer back to plain
+		// textarea editing. Runtime-only, like yolo — restart reverts to
+		// the options.tui.vim_mode default.
+		if m.vim == nil {
+			m.vim = newVimEngine(m.com.Config())
+			cmds = append(cmds, util.ReportInfo("Vim mode on (normal mode — press i to insert)"))
+		} else {
+			m.vim = nil
+			cmds = append(cmds, util.ReportInfo("Vim mode off"))
+		}
+		m.dialog.CloseDialog(dialog.CommandsID)
 	case dialog.ActionSelectNotificationStyle:
 		cfg := m.com.Config()
 		if cfg != nil && cfg.Options != nil {
@@ -1998,6 +2020,16 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 		return m.handleDialogMsg(msg)
 	}
 
+	// In vim insert or visual mode, esc returns to normal mode first — it
+	// must never reach the cancel-agent handler below, so a running task
+	// can't be cancelled straight from insert/visual mode. Once in normal
+	// mode, esc falls through to cancel as usual.
+	if m.vim != nil && (m.vim.Insert() || m.vim.Visual()) && m.focus == uiFocusEditor &&
+		(msg.String() == "esc" || msg.String() == "ctrl+[") {
+		m.vim.HandleKey(&m.textarea, msg.String())
+		return tea.Batch(cmds...)
+	}
+
 	// Handle cancel key when agent is busy.
 	if key.Matches(msg, m.keyMap.Chat.Cancel) {
 		if m.isAgentBusy() {
@@ -2038,8 +2070,39 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 				}
 			}
 
-			if ok := m.attachments.Update(msg); ok {
-				return tea.Batch(cmds...)
+			// In vim normal mode the engine owns its keys, so don't let
+			// the attachment delete-mode binding (ctrl+r) — or any other
+			// editor feature — eat them before the vim block below.
+			if m.vim == nil || m.vim.Insert() || !vim.ConsumesNormal(msg.String()) {
+				if ok := m.attachments.Update(msg); ok {
+					return tea.Batch(cmds...)
+				}
+			}
+
+			// Vim modal editing. In normal mode the engine consumes
+			// printable keys, arrows, and esc before the textarea; app
+			// chords (enter=send, tab, ctrl/alt) fall through. In insert
+			// mode only esc returns to normal — everything else types.
+			if m.vim != nil {
+				s := msg.String()
+				if m.vim.Insert() {
+					if s == "esc" || s == "ctrl+[" {
+						m.vim.HandleKey(&m.textarea, s)
+						return tea.Batch(cmds...)
+					}
+				} else if vim.ConsumesNormal(s) {
+					prevHeight := m.textarea.Height()
+					m.vim.HandleKey(&m.textarea, s)
+					// Mirror a yank/delete to the OS clipboard, matching a
+					// vim 'unnamedplus' setup (yank/delete -> system register).
+					if txt, ok := m.vim.ConsumeClipboard(); ok {
+						cmds = append(cmds, common.SetSystemClipboard(txt))
+					}
+					if cmd := m.handleTextareaHeightChange(prevHeight); cmd != nil {
+						cmds = append(cmds, cmd)
+					}
+					return tea.Batch(cmds...)
+				}
 			}
 
 			switch {
@@ -2471,6 +2534,17 @@ func (m *UI) Draw(scr uv.Screen, area uv.Rectangle) *tea.Cursor {
 
 		if m.textarea.Focused() {
 			cur := m.textarea.Cursor()
+			if cur != nil {
+				cur.Blink = m.cursorBlinkEnabled()
+			}
+			if m.vim != nil && cur != nil {
+				// Block cursor in normal mode, bar in insert mode.
+				if m.vim.Insert() {
+					cur.Shape = tea.CursorBar
+				} else {
+					cur.Shape = tea.CursorBlock
+				}
+			}
 			cur.X++                            // Adjust for app margins
 			cur.Y += m.layout.editor.Min.Y + 1 // Offset for attachments row
 			return cur
@@ -3284,6 +3358,15 @@ func (m *UI) insertMCPResourceCompletion(item completions.ResourceCompletionValu
 	return tea.Batch(heightCmd, resourceCmd)
 }
 
+// cursorBlinkEnabled reports whether the composer cursor should blink
+// (options.tui.cursor_blink, default true).
+func (m *UI) cursorBlinkEnabled() bool {
+	if cfg := m.com.Config(); cfg != nil && cfg.Options != nil && cfg.Options.TUI != nil && cfg.Options.TUI.CursorBlink != nil {
+		return *cfg.Options.TUI.CursorBlink
+	}
+	return true
+}
+
 // completionsPosition returns the X and Y position for the completions popup.
 func (m *UI) completionsPosition() image.Point {
 	cur := m.textarea.Cursor()
@@ -3359,11 +3442,114 @@ func (m *UI) renderEditorView(width int) string {
 	if len(m.attachments.List()) > 0 {
 		attachmentsView = m.attachments.Render(width)
 	}
+	taView := m.textarea.View()
+	if m.vim != nil && m.vim.Visual() {
+		taView = m.overlayVisualSelection(taView, width)
+	}
 	return strings.Join([]string{
 		attachmentsView,
-		m.textarea.View(),
-		"", // margin at bottom of editor
+		taView,
+		m.vimModeIndicator(), // margin at bottom of editor, doubles as vim mode line
 	}, "\n")
+}
+
+// vimModeIndicator renders a small, unobtrusive vim mode line (e.g.
+// "-- INSERT --") aligned under the prompt gutter. It returns "" when vim
+// mode is off or in normal mode, so the bottom editor margin is preserved.
+func (m *UI) vimModeIndicator() string {
+	if m.vim == nil {
+		return ""
+	}
+	mode := m.vim.Mode()
+	if mode == vim.ModeNormal {
+		return ""
+	}
+	label := fmt.Sprintf("-- %s --", mode.String())
+	// Reuse the muted normal-prompt style so the indicator stays themed and
+	// quiet; indent under the prompt gutter ("  > " width).
+	style := m.com.Styles.Editor.PromptNormalBlurred
+	return strings.Repeat(" ", editorPromptWidth) + style.Render(label)
+}
+
+// newVimEngine builds a vim engine and applies the composer's indent
+// config (options.tui.vim_indent), defaulting to two spaces.
+func newVimEngine(cfg *config.Config) *vim.Engine {
+	e := vim.New()
+	unit, width := cfg.Options.TUI.VimIndent.Unit()
+	e.SetIndent(unit, width)
+	return e
+}
+
+// editorPromptWidth is the column width reserved by the composer prompt
+// (e.g. "  > "); see setEditorPrompt's SetPromptFunc(4, ...).
+const editorPromptWidth = 4
+
+// overlayVisualSelection paints the vim visual-mode selection onto the
+// rendered textarea view. It highlights each logical row's selected columns
+// individually, offset past the prompt gutter (so the "  > " / "::: "
+// prompts are never painted over) and shifted up by the scroll offset. It
+// assumes one logical line renders to one visual row, so long soft-wrapped
+// lines may highlight imprecisely (the overlay only restyles cells, so a
+// mismatch is cosmetic — never corrupting text).
+//
+// VisualRowSpans reports RUNE columns, but list.Highlight indexes by DISPLAY
+// cell, so each span's columns are mapped to display columns (via
+// ansi.StringWidth on the rune prefix) before highlighting; this keeps the
+// overlay aligned over wide runes (CJK/emoji) and tabs.
+func (m *UI) overlayVisualSelection(taView string, width int) string {
+	height := strings.Count(taView, "\n") + 1
+	if width <= 0 || height <= 0 {
+		return taView
+	}
+
+	lines := strings.Split(m.textarea.Value(), "\n")
+	lineLen := logicalLineLengths(lines)
+	spans := m.vim.VisualRowSpans(m.textarea.Line(), m.textarea.Column(), lineLen)
+	scroll := m.textarea.ScrollYOffset()
+	area := image.Rect(0, 0, width, height)
+	hl := list.ToHighlighter(m.com.Styles.TextSelection)
+
+	out := taView
+	for _, sp := range spans {
+		vr := sp.Row - scroll // logical row -> visible row (no-wrap assumption)
+		if vr < 0 || vr >= height {
+			continue
+		}
+		var line string
+		if sp.Row >= 0 && sp.Row < len(lines) {
+			line = lines[sp.Row]
+		}
+		// Map rune columns to display columns, then add the prompt offset
+		// (which is all single-width ASCII, so its rune and display widths
+		// match). Keep the range half-open ([start, end)).
+		start := displayCol(line, sp.StartCol) + editorPromptWidth
+		end := displayCol(line, sp.EndCol) + editorPromptWidth
+		out = list.Highlight(out, area, vr, start, vr, end, hl)
+	}
+	return out
+}
+
+// displayCol returns the display-cell width of the first runeCol runes of
+// line, i.e. it maps a rune column index to the display column where that
+// rune begins. Wide runes (CJK/emoji) and tabs occupy more than one cell.
+func displayCol(line string, runeCol int) int {
+	runes := []rune(line)
+	if runeCol > len(runes) {
+		runeCol = len(runes)
+	}
+	if runeCol <= 0 {
+		return 0
+	}
+	return ansi.StringWidth(string(runes[:runeCol]))
+}
+
+// logicalLineLengths returns the rune length of each logical line.
+func logicalLineLengths(lines []string) []int {
+	lens := make([]int, len(lines))
+	for i, p := range lines {
+		lens[i] = len([]rune(p))
+	}
+	return lens
 }
 
 // cacheSidebarLogo renders and caches the sidebar logo at the specified width.
@@ -3970,6 +4156,11 @@ func (m *UI) handlePasteMsg(msg tea.PasteMsg) tea.Cmd {
 		return true
 	}
 	if !allExistsAndValid() {
+		// In vim insert mode, make each paste its own undo step so a later
+		// `u` removes just this paste rather than the whole insert session.
+		if m.vim != nil && m.vim.Insert() {
+			m.vim.BreakUndo(&m.textarea)
+		}
 		prevHeight := m.textarea.Height()
 		cmd := m.updateTextareaWithPrevHeight(msg, prevHeight)
 		m.checkBangModeAfterPaste()

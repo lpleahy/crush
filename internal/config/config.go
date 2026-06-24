@@ -221,11 +221,35 @@ type LSPConfig struct {
 type TUIOptions struct {
 	CompactMode bool   `json:"compact_mode,omitempty" jsonschema:"description=Enable compact mode for the TUI interface,default=false"`
 	DiffMode    string `json:"diff_mode,omitempty" jsonschema:"description=Diff mode for the TUI interface,enum=unified,enum=split"`
+	VimMode     bool   `json:"vim_mode,omitempty" jsonschema:"description=Enable vim-style modal editing in the message composer,default=false"`
+	CursorBlink *bool  `json:"cursor_blink,omitempty" jsonschema:"description=Whether the composer cursor blinks. Defaults to true; set false for a steady cursor.,default=true"`
 	// Here we can add themes later or any TUI related options
 	//
 
+	VimIndent   *VimIndent  `json:"vim_indent,omitempty" jsonschema:"description=Indent unit for the vim >> / << operators in the composer. Defaults to 2 spaces."`
 	Completions Completions `json:"completions,omitzero" jsonschema:"description=Completions UI options"`
 	Transparent *bool       `json:"transparent,omitempty" jsonschema:"description=Enable transparent background for the TUI interface,default=false"`
+}
+
+// VimIndent configures the unit one vim shift (>> / << / visual > <) applies
+// in the composer. Style "spaces" (default) inserts Width spaces; "tabs"
+// inserts a tab and treats it as Width columns when dedenting.
+type VimIndent struct {
+	Style string `json:"style,omitempty" jsonschema:"description=Whether a shift inserts spaces or a tab,enum=spaces,enum=tabs,default=spaces"`
+	Width int    `json:"width,omitempty" jsonschema:"description=Columns per shift (space count\\, or tab display width for dedent),default=2"`
+}
+
+// Unit returns the string one shift inserts and the column width it occupies.
+// Defaults to two spaces when unset.
+func (v *VimIndent) Unit() (unit string, width int) {
+	width = 2
+	if v != nil && v.Width > 0 {
+		width = v.Width
+	}
+	if v != nil && v.Style == "tabs" {
+		return "\t", width
+	}
+	return strings.Repeat(" ", width), width
 }
 
 // Completions defines options for the completions UI.
