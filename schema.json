@@ -751,10 +751,24 @@
           ],
           "description": "Diff mode for the TUI interface"
         },
+        "vim_mode": {
+          "type": "boolean",
+          "description": "Enable vim-style modal editing in the message composer",
+          "default": false
+        },
+        "cursor_blink": {
+          "type": "boolean",
+          "description": "Whether the composer cursor blinks. Defaults to true; set false for a steady cursor.",
+          "default": true
+        },
         "theme": {
           "type": "string",
           "description": "TUI color theme name. Empty or auto uses the provider-aware default. Built-in themes include auto charmtone-pantera hypercrush-obsidiana and tokyonight-storm. Custom themes can be selected by name.",
           "default": "auto"
+        },
+        "vim_indent": {
+          "$ref": "#/$defs/VimIndent",
+          "description": "Indent unit for the vim \u003e\u003e / \u003c\u003c operators in the composer. Defaults to 2 spaces."
         },
         "completions": {
           "$ref": "#/$defs/Completions",
@@ -1076,6 +1090,26 @@
         },
         "grep": {
           "$ref": "#/$defs/ToolGrep"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "VimIndent": {
+      "properties": {
+        "style": {
+          "type": "string",
+          "enum": [
+            "spaces",
+            "tabs"
+          ],
+          "description": "Whether a shift inserts spaces or a tab",
+          "default": "spaces"
+        },
+        "width": {
+          "type": "integer",
+          "description": "Columns per shift (space count, or tab display width for dedent)",
+          "default": 2
         }
       },
       "additionalProperties": false,
