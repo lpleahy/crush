@@ -31,17 +31,9 @@ type chatSearchState struct {
 	editing bool
 	matches []SearchMatch
 	cur     int
-	// composer is set when the bar searches the composer draft instead of
-	// the conversation output; cmatches/ccur are its results.
-	composer bool
-	cmatches []composerMatch
-	ccur     int
 }
 
 func (s chatSearchState) hasMatches() bool {
-	if s.composer {
-		return len(s.cmatches) > 0
-	}
 	return len(s.matches) > 0
 }
 
@@ -49,11 +41,8 @@ func (s chatSearchState) hasMatches() bool {
 func (m *UI) searchQuery() string { return m.searchInput.Value() }
 
 // searchBarCounts returns the (current, total) match count for the active
-// bar — composer-draft or conversation-output.
+// conversation-output search bar.
 func (m *UI) searchBarCounts() (cur, total int) {
-	if m.search.composer {
-		return m.search.ccur, len(m.search.cmatches)
-	}
 	return m.search.cur, len(m.search.matches)
 }
 
