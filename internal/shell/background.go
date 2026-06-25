@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/crush/internal/csync"
+	"github.com/charmbracelet/crush/internal/pubsub"
 )
 
 const (
@@ -57,6 +58,7 @@ type BackgroundShell struct {
 	done        chan struct{}
 	exitErr     error
 	completedAt atomic.Int64 // Unix timestamp when job completed (0 if still running)
+	waiters     atomic.Int32 // callers currently blocked in WaitContext (agent wait-block)
 }
 
 // BackgroundShellManager manages background shell instances.
@@ -83,6 +85,71 @@ func GetBackgroundShellManager() *BackgroundShellManager {
 		backgroundManager = newBackgroundShellManager()
 	})
 	return backgroundManager
+}
+
+// JobInfo is a point-in-time snapshot of a background job for display.
+type JobInfo struct {
+	ID          string
+	Command     string
+	Description string
+	WorkingDir  string
+	Done        bool
+	Waiting     bool  // an agent tool is currently wait-blocking on this job
+	ExitErr     error // set only when Done
+	CompletedAt int64 // Unix seconds when the job finished (0 while running)
+}
+
+// JobEvent is published whenever a background job's lifecycle or wait state
+// changes (started, blocked/unblocked, completed, killed).
+type JobEvent struct {
+	Job JobInfo
+}
+
+// jobBroker fans background-job state changes out to subscribers (e.g. the TUI
+// sidebar). It mirrors the per-resource brokers used for MCP/LSP/skills.
+var jobBroker = pubsub.NewBroker[JobEvent]()
+
+// SubscribeJobEvents returns a channel of background-job lifecycle events.
+func SubscribeJobEvents(ctx context.Context) <-chan pubsub.Event[JobEvent] {
+	return jobBroker.Subscribe(ctx)
+}
+
+// ShutdownJobBroker stops the job event broker (call on app shutdown).
+func ShutdownJobBroker() {
+	jobBroker.Shutdown()
+}
+
+// info snapshots the shell's current state. exitErr is read only after the done
+// channel is observed closed, so the read is race-free.
+func (bs *BackgroundShell) info() JobInfo {
+	ji := JobInfo{
+		ID:          bs.ID,
+		Command:     bs.Command,
+		Description: bs.Description,
+		WorkingDir:  bs.WorkingDir,
+		CompletedAt: bs.completedAt.Load(),
+	}
+	select {
+	case <-bs.done:
+		ji.Done = true
+		ji.ExitErr = bs.exitErr
+	default:
+	}
+	ji.Waiting = !ji.Done && bs.waiters.Load() > 0
+	return ji
+}
+
+func publishJob(t pubsub.EventType, bs *BackgroundShell) {
+	jobBroker.Publish(t, JobEvent{Job: bs.info()})
+}
+
+// JobsSnapshot returns a snapshot of every tracked background job.
+func (m *BackgroundShellManager) JobsSnapshot() []JobInfo {
+	out := make([]JobInfo, 0, m.shells.Len())
+	for bs := range m.shells.Seq() {
+		out = append(out, bs.info())
+	}
+	return out
 }
 
 // Start creates and starts a new background shell with the given command.
@@ -115,9 +182,13 @@ func (m *BackgroundShellManager) Start(ctx context.Context, workingDir string, b
 	}
 
 	m.shells.Set(id, bgShell)
+	publishJob(pubsub.CreatedEvent, bgShell)
 
 	go func() {
-		defer close(bgShell.done)
+		defer func() {
+			close(bgShell.done)
+			publishJob(pubsub.UpdatedEvent, bgShell)
+		}()
 
 		err := shell.ExecStream(shellCtx, command, bgShell.stdout, bgShell.stderr)
 
@@ -136,10 +207,11 @@ func (m *BackgroundShellManager) Get(id string) (*BackgroundShell, bool) {
 // Remove removes a background shell from the manager without terminating it.
 // This is useful when a shell has already completed and you just want to clean up tracking.
 func (m *BackgroundShellManager) Remove(id string) error {
-	_, ok := m.shells.Take(id)
+	bs, ok := m.shells.Take(id)
 	if !ok {
 		return fmt.Errorf("background shell not found: %s", id)
 	}
+	publishJob(pubsub.DeletedEvent, bs)
 	return nil
 }
 
@@ -152,6 +224,7 @@ func (m *BackgroundShellManager) Kill(id string) error {
 
 	shell.cancel()
 	<-shell.done
+	publishJob(pubsub.DeletedEvent, shell)
 	return nil
 }
 
@@ -236,6 +309,13 @@ func (bs *BackgroundShell) Wait() {
 }
 
 func (bs *BackgroundShell) WaitContext(ctx context.Context) bool {
+	// Mark the job as being waited on so the UI can show it as blocked.
+	bs.waiters.Add(1)
+	publishJob(pubsub.UpdatedEvent, bs)
+	defer func() {
+		bs.waiters.Add(-1)
+		publishJob(pubsub.UpdatedEvent, bs)
+	}()
 	select {
 	case <-bs.done:
 		return true

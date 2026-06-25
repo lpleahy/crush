@@ -529,6 +529,7 @@ func (app *App) setupEvents() {
 	setupSubscriberMustDeliver(ctx, app.serviceEventsWG, "run-completions", app.runCompletions.Subscribe, app.events)
 	setupSubscriber(ctx, app.serviceEventsWG, "mcp", mcp.SubscribeEvents, app.events)
 	setupSubscriber(ctx, app.serviceEventsWG, "lsp", SubscribeLSPEvents, app.events)
+	setupSubscriber(ctx, app.serviceEventsWG, "jobs", shell.SubscribeJobEvents, app.events)
 	if app.Skills != nil {
 		setupSubscriber(ctx, app.serviceEventsWG, "skills", app.Skills.SubscribeEvents, app.events)
 	}
@@ -536,6 +537,7 @@ func (app *App) setupEvents() {
 		cancel()
 		app.serviceEventsWG.Wait()
 		app.events.Shutdown()
+		shell.ShutdownJobBroker()
 		return nil
 	}
 	app.cleanupFuncs = append(app.cleanupFuncs, cleanupFunc)
