@@ -59,12 +59,13 @@ func (m *UI) modelInfo(width int) string {
 
 // getDynamicHeightLimits will give us the num of items to show in each section based on the height
 // some items are more important than others.
-func getDynamicHeightLimits(availableHeight, fileCount, lspCount, mcpCount, skillCount int) (maxFiles, maxLSPs, maxMCPs, maxSkills int) {
+func getDynamicHeightLimits(availableHeight, fileCount, jobCount, lspCount, mcpCount, skillCount int) (maxFiles, maxJobs, maxLSPs, maxMCPs, maxSkills int) {
 	const (
 		minItemsPerSection = 2
 		// Keep these high so dynamic layout uses available sidebar space
 		// instead of hitting small hard limits.
 		defaultMaxFilesShown    = 1000
+		defaultMaxJobsShown     = 1000
 		defaultMaxLSPsShown     = 1000
 		defaultMaxMCPsShown     = 1000
 		defaultMaxSkillsShown   = 1000
@@ -72,19 +73,20 @@ func getDynamicHeightLimits(availableHeight, fileCount, lspCount, mcpCount, skil
 	)
 
 	if availableHeight < minAvailableHeightLimit {
-		return minItemsPerSection, minItemsPerSection, minItemsPerSection, minItemsPerSection
+		return minItemsPerSection, minItemsPerSection, minItemsPerSection, minItemsPerSection, minItemsPerSection
 	}
 
 	maxFiles = minItemsPerSection
+	maxJobs = minItemsPerSection
 	maxLSPs = minItemsPerSection
 	maxMCPs = minItemsPerSection
 	maxSkills = minItemsPerSection
 
-	remainingHeight := max(0, availableHeight-(minItemsPerSection*4))
+	remainingHeight := max(0, availableHeight-(minItemsPerSection*5))
 
-	sectionValues := []*int{&maxFiles, &maxLSPs, &maxMCPs, &maxSkills}
-	sectionCaps := []int{defaultMaxFilesShown, defaultMaxLSPsShown, defaultMaxMCPsShown, defaultMaxSkillsShown}
-	sectionNeeds := []int{max(0, fileCount-maxFiles), max(0, lspCount-maxLSPs), max(0, mcpCount-maxMCPs), max(0, skillCount-maxSkills)}
+	sectionValues := []*int{&maxFiles, &maxJobs, &maxLSPs, &maxMCPs, &maxSkills}
+	sectionCaps := []int{defaultMaxFilesShown, defaultMaxJobsShown, defaultMaxLSPsShown, defaultMaxMCPsShown, defaultMaxSkillsShown}
+	sectionNeeds := []int{max(0, fileCount-maxFiles), max(0, jobCount-maxJobs), max(0, lspCount-maxLSPs), max(0, mcpCount-maxMCPs), max(0, skillCount-maxSkills)}
 
 	for remainingHeight > 0 {
 		allocated := false
@@ -123,7 +125,7 @@ func getDynamicHeightLimits(availableHeight, fileCount, lspCount, mcpCount, skil
 		}
 	}
 
-	return maxFiles, maxLSPs, maxMCPs, maxSkills
+	return maxFiles, maxJobs, maxLSPs, maxMCPs, maxSkills
 }
 
 // sidebar renders the chat sidebar containing session title, working
@@ -186,30 +188,30 @@ func (m *UI) drawSidebar(scr uv.Screen, area uv.Rectangle) {
 	}
 
 	skillsCount := len(m.skillStatusItems())
+	jobsCount := len(m.visibleJobs())
 
-	maxFiles, maxLSPs, maxMCPs, maxSkills := getDynamicHeightLimits(remainingHeight, filesCount, lspsCount, mcpsCount, skillsCount)
+	maxFiles, maxJobs, maxLSPs, maxMCPs, maxSkills := getDynamicHeightLimits(remainingHeight, filesCount, jobsCount, lspsCount, mcpsCount, skillsCount)
 
+	jobsSection := m.jobsInfo(width, maxJobs, true)
 	lspSection := m.lspInfo(width, maxLSPs, true)
 	mcpSection := m.mcpInfo(width, maxMCPs, true)
 	skillsSection := m.skillsInfo(width, maxSkills, true)
 	filesSection := m.filesInfo(m.com.Workspace.WorkingDir(), width, maxFiles, true)
+
+	// The Tasks section only appears while there are running/recent jobs, so
+	// the sidebar isn't cluttered with "Tasks: None" when nothing is running.
+	sidebarSections := []string{sidebarHeader, filesSection}
+	if jobsCount > 0 {
+		sidebarSections = append(sidebarSections, "", jobsSection)
+	}
+	sidebarSections = append(sidebarSections, "", lspSection, "", mcpSection, "", skillsSection)
 
 	uv.NewStyledString(
 		lipgloss.NewStyle().
 			MaxWidth(width).
 			MaxHeight(height).
 			Render(
-				lipgloss.JoinVertical(
-					lipgloss.Left,
-					sidebarHeader,
-					filesSection,
-					"",
-					lspSection,
-					"",
-					mcpSection,
-					"",
-					skillsSection,
-				),
+				lipgloss.JoinVertical(lipgloss.Left, sidebarSections...),
 			),
 	).Draw(scr, area)
 }

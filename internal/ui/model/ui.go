@@ -42,6 +42,7 @@ import (
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/charmbracelet/crush/internal/session"
+	"github.com/charmbracelet/crush/internal/shell"
 	"github.com/charmbracelet/crush/internal/skills"
 	"github.com/charmbracelet/crush/internal/stringext"
 	"github.com/charmbracelet/crush/internal/ui/anim"
@@ -267,6 +268,10 @@ type UI struct {
 	// skills
 	skillStates []*skills.SkillState
 
+	// jobs (background shells); jobsTicking guards the expiry ticker.
+	jobStates   []shell.JobInfo
+	jobsTicking bool
+
 	// sidebarLogo keeps a cached version of the sidebar sidebarLogo.
 	sidebarLogo string
 
@@ -376,6 +381,7 @@ func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
 		initialSessionID:    initialSessionID,
 		continueLastSession: continueLast,
 		skillStates:         skills.GetLatestStates(),
+		jobStates:           shell.GetBackgroundShellManager().JobsSnapshot(),
 	}
 
 	status := NewStatus(com, ui)
@@ -750,6 +756,20 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lspStates = m.com.Workspace.LSPGetStates()
 	case pubsub.Event[skills.Event]:
 		m.skillStates = msg.Payload.States
+	case pubsub.Event[shell.JobEvent]:
+		m.jobStates = shell.GetBackgroundShellManager().JobsSnapshot()
+		if !m.jobsTicking && len(m.visibleJobs()) > 0 {
+			m.jobsTicking = true
+			cmds = append(cmds, m.jobsTickCmd())
+		}
+	case jobsTickMsg:
+		// Re-snapshot so finished jobs age out of the visible window.
+		m.jobStates = shell.GetBackgroundShellManager().JobsSnapshot()
+		if len(m.visibleJobs()) > 0 {
+			cmds = append(cmds, m.jobsTickCmd())
+		} else {
+			m.jobsTicking = false
+		}
 	case pubsub.Event[mcp.Event]:
 		switch msg.Payload.Type {
 		case mcp.EventStateChanged:
