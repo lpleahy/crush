@@ -2049,12 +2049,8 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 		return m.handleCopyModeKey(msg)
 	}
 
-	// When a search bar is open it captures all keys (composer-draft or
-	// conversation-output search).
+	// When a search bar is open it captures all keys.
 	if m.search.active {
-		if m.search.composer {
-			return m.handleComposerSearchKey(msg)
-		}
 		return m.handleChatSearchKey(msg)
 	}
 
@@ -3620,41 +3616,11 @@ func (m *UI) renderEditorView(width int) string {
 	if m.vim != nil && m.vim.Visual() {
 		taView = m.overlayVisualSelection(taView, width)
 	}
-	if m.search.active && m.search.composer && m.search.hasMatches() {
-		taView = m.overlayComposerMatch(taView, width)
-	}
 	return strings.Join([]string{
 		attachmentsView,
 		taView,
 		"", // margin at bottom of editor
 	}, "\n")
-}
-
-// overlayComposerMatch highlights the current composer-search match on the
-// rendered draft (same overlay as the visual selection), so "/" search shows
-// where it landed.
-func (m *UI) overlayComposerMatch(taView string, width int) string {
-	height := strings.Count(taView, "\n") + 1
-	if width <= 0 || height <= 0 {
-		return taView
-	}
-	mt := m.search.cmatches[m.search.ccur]
-	qlen := len([]rune(strings.TrimSpace(m.searchQuery())))
-	lines := strings.Split(m.textarea.Value(), "\n")
-	if qlen == 0 || mt.line < 0 || mt.line >= len(lines) {
-		return taView
-	}
-	vr := mt.line - m.textarea.ScrollYOffset()
-	if vr < 0 || vr >= height {
-		return taView
-	}
-	row := []rune(lines[mt.line])
-	c0 := max(0, min(mt.col, len(row)))
-	c1 := max(0, min(mt.col+qlen, len(row)))
-	start := editorPromptWidth + lipgloss.Width(string(row[:c0]))
-	end := editorPromptWidth + lipgloss.Width(string(row[:c1]))
-	area := image.Rect(0, 0, width, height)
-	return list.Highlight(taView, area, vr, start, vr, end, list.ToHighlighter(m.com.Styles.TextSelection))
 }
 
 // newVimEngine builds a vim engine and applies the composer's indent
